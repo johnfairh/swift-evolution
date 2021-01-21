@@ -122,7 +122,7 @@ distributed actor Player {
 }
 ```
 
-Rather than having to manually implement:
+Compare `Player` to having to manually implement:
 
 - defining "game action" enums which represent e.g. grabbing an item,
 - declaring delegate protocols which get called when game actions happen,
@@ -137,9 +137,9 @@ Rather than having to manually implement:
 
 Distributed actors are declared using the `distributed actor` keywords, similar to local-only actors which are declared using only the `actor` keyword.
 
-Similarily to local-only actors which automatically conform to the `Actor` protocol, a type declared as `distributed actor` is implicitly conforming to the `DistributedActor` protocol.
+Similar to local-only actors which automatically conform to the `Actor` protocol, a type declared as `distributed actor` implicitly conforms to the `DistributedActor` protocol.
 
-As with the `Actor` protocol, it is not possible to implement the `DistributedActor` protocol manually. The only way to conform to `DistributedActor` is to declare a `distributed actor`. It is not possible to declare any other type (struct, actor, class, ...) and make it conform to the `DistributedActor` protocol manually, for the same reasons as doing so is illegal for the Actor protocol: such a type would be missing additional type-checking restrictions and synthesized pieces which are necessary for distributed actors to function properly.
+As with the `Actor` protocol, it is not possible to implement the `DistributedActor` protocol directly. The only way to conform to `DistributedActor` is to declare a `distributed actor`. It is not possible to declare any other type (struct, actor, class, ...) and make it conform to the `DistributedActor` protocol manually, for the same reasons as doing so is illegal for the `Actor` protocol: such a type would be missing additional type-checking restrictions and synthesized pieces which are necessary for distributed actors to function properly.
 
 The distributed actor protocol is defined as:
 
@@ -160,9 +160,9 @@ public protocol DistributedActor: Actor, ... {
 }
 ```
 
-The `DistributedActor` protocol includes a few more conformances which will be discussed in depth in their own dedicated sections, as we discuss the importance of the [actor address](#actor-address) property.
+The `DistributedActor` protocol includes a few more conformances which will be covered in depth in their own dedicated sections, as we discuss the importance of the [actor address](#actor-address) property.
 
-The `actorTransport` and `actorAddress` are immutable, and MUST NOT change during the lifetime of the specific actor instance. Equality as well as messaging internals rely on this guarantee.
+`actorTransport` and `actorAddress` are immutable, and MUST NOT change during the lifetime of the specific actor instance. Equality as well as messaging internals rely on this guarantee.
 
 A `distributed actor` and extensions on it are the only places where `distributed func` declarations are allowed. This is because in order to implement a distributed function, a transport and identity (actor address) are necessary.
 
@@ -174,10 +174,10 @@ It is not allowed to define global actors which are distributed actors. If enoug
 
 ### Location Transparency
 
-When an actor is declared using the distributed keyword (`distributed actor Greeter {}`), it is referred to as a "distributed actor". At runtime references to distributed actors can be either "local" or "remote":
+When an actor is declared using the `distributed` keyword (`distributed actor Greeter {}`), it is referred to as a "distributed actor". At runtime, references to distributed actors can be either "local" or "remote":
 
-- **local** `distributed actor` references: are semantically the same as a non-distributed `actor` at runtime. They have the `transport` property and are `Codable` as their actor address (discussed below), however all isolation and execution semantics are exactly the same as plain-old local-only actor references.
-- **remote** `distributed actor` references: on which invocations of `distributed func` are actually implemented as message sends over the stored `transport`. It is up to the transport and frameworks using this infrastructure to define what serialization and networking (or IPC) mechanism is used for the messaging. Semantically, it is indistinguishable from "just an actor," since in the actor model, all communication between actors occurs via asynchronous messaging.
+- **local** `distributed actor` references: these are semantically the same as non-distributed `actor`s at runtime. They have the `transport` property and `Codable` as their actor address (discussed below), however all isolation and execution semantics are exactly the same as plain-old local-only actor references.
+- **remote** `distributed actor` references: `distributed func`s invoked these are actually implemented as messages sent over the stored `transport`. It is up to the transport and frameworks using this infrastructure to define what serialization and networking (or IPC) mechanism are used for the messaging. Semantically, it is indistinguishable from "just an actor," since in the actor model, all communication between actors occurs via asynchronous messaging.
 
 It is by design, that by looking at a piece of code like this:
 
