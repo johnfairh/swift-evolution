@@ -105,7 +105,7 @@ This keyword enables a few additional restrictions to what the typesystem is alr
 
 Instead of implementing time and time again the logic around serializing, sending over the network, receiving, and then serializing the same payloads as many of us do today, distributed actors allow us to encapsulate all of the serialization and message passing logic in a transport and regain our focus on the functional logic.
 
-You could imagine a `Player` actor (such as in the [SwiftShot](https://developer.apple.com/documentation/arkit/swiftshot_creating_a_game_for_augmented_reality) sample app from WWDC18), to be expressed as a distributed actor. Instead of having the code related to serializing, deserializing, and sending actions a player performs throughout tens of classes, we can capture the logic where it belongs, as part of the player distributed actor:
+Let's imagine a `Player` actor (such as in the [SwiftShot](https://developer.apple.com/documentation/arkit/swiftshot_creating_a_game_for_augmented_reality) sample app from WWDC18) being expressed as a distributed actor. Instead of having the code related to serialization and sending actions that a player performs scattered across dozens of classes, we can capture the logic where it belongs, as part of the `Player` distributed actor:
 
 ```swift
 distributed actor Item { ... }
