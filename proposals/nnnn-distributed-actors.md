@@ -62,15 +62,16 @@ Instead of implementing time and time again logic around serializing, sending ov
 You could imagine a `Player` actor (such as in the [SwiftShot](https://developer.apple.com/documentation/arkit/swiftshot_creating_a_game_for_augmented_reality) sample app from WWDC18), to be expressed as a distributed actor. Instead of having the code related to serializing, deserializing, and sending actions a player performs throughout tens of classes, we can capture the logic where it belongs, as part of the player distributed actor:
 
 ```swift
-distributed actor Item { }
+distributed actor Item { ... }
   
 distributed actor Player { 
   var name: String
   
-  distributed func grab(item: Item) async throws -> RemainingHealth {
-    print("Hit by '\(other)' from \(location)")
-    health.hit()
-    return health.remaining
+  distributed func grabAndThrow(item: Item, at: Target) async throws {
+    print("Player \(name) grabbed \(item)")
+    let grabbed = await item.grab()
+    print("Player \(name) throwing \(item) at \(target)")
+    await grabbed.throw(at: target)
   }
 }
 ```
@@ -80,6 +81,7 @@ Rather than having to manually implement:
 - defining "game action" enums which represent e.g. grabing an item,
 - declaring delegate protocols which get called when game actions happen,
 - implementing encoding/decoding of the game actions to/from their wire representations,
+- implementing logic to route incoming messages to the apropriate player 
 
 
 
@@ -900,7 +902,7 @@ Such distributed dinner cooking can then be visualized as:
                                         \--cook---------x  [5s]
 ```
 
-
+Specific tracing systems may offer actual fancy nice UIs to visualize this rather than ASCII art.
 
 #### Distributed `Deadline` propagation
 
@@ -947,9 +949,10 @@ While this proposal intentionally does not introduce any specific transport, the
 
 It would be very natural, and has been considered and ensured that it will be possible by using these mechanism, to build any of the following transports:
 
-- clustering and messaging protocols for distributed actor systems, e.g. like [Erlang/OTP](https://www.google.com/search?q=erlang) or [Akka Cluster](https://doc.akka.io/docs/akka/current/typed/cluster-concepts.html),
-- [inter-process communication](https://en.wikipedia.org/wiki/Inter-process_communication) protocols, e.g. XPC on Apple platforms or shared-memory
+- clustering and messaging protocols for distributed actor systems, e.g. like [Erlang/OTP](https://www.google.com/search?q=erlang) or [Akka Cluster](https://doc.akka.io/docs/akka/current/typed/cluster-concepts.html).
+- [inter-process communication](https://en.wikipedia.org/wiki/Inter-process_communication) protocols, e.g. XPC on Apple platforms or shared-memory.
 - various other RPC-style protocols, e.g. the standard [XML RPC](http://xmlrpc.com), [JSON RPC](https://www.jsonrpc.org/specification) or custom protocols with similar semantics.
+- it should also be possible to communicate with WASM and "Swift in the Browser" using distributed actors and an apropriate websocket transport.
 
 #### Support for `AsyncSequence`
 
