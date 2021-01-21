@@ -61,11 +61,11 @@ This is already quite great, but we can do much better than that. The actor mode
 
 At their core actors define a _general computational model_ relying only on the core concept of exchanging messages. Swift offers a convenient syntax for performing those messaging patterns in the form of asynchronous functions. However conceptually, this all still implements the semantics of message passing back and forth between fully isolated actors. Such isolation guarantees and message-exchange driven semantics are exactly what networks are! As far as the actor model is concerned, there is no difference if an actor is local, or remote.
 
-In order to allow Swift developer's to benefit from this unique value proposition of the actor model, this proposal introduces Distributed Actors, which can be used to represent actors located on remote processes or hosts. Various actor message transports can be implemented, offering developers the same consistent abstraction layer (actors) regardless whether interacting with local actors, or remote actors running on other processes, hosts, or even in fully-managed datacenters.
+In order to allow Swift developers to benefit from this unique value proposition of the actor model, this proposal introduces **Distributed Actors**, which can be used to represent actors located on remote processes or hosts. Various actor message transports can be implemented, offering developers the same consistent abstraction layer (actors) whether they are interacting with local actors or remote actors running on other processes, hosts, or even in fully-managed datacenters.
 
 Swift-evolution thread: [Discussion thread topic for that proposal](https://forums.swift.org/)
 
-After reading the proposal, we also recommend having a look at the [Related Proposals](#related-proposals), which may be useful to understand the big picture and how multiple swift evolution proposals and swift libraries come together to support this proposal.
+After reading the proposal, we also recommend having a look at the [Related Proposals](#related-proposals), which may be useful to understand the big picture and how multiple Swift evolution proposals and libraries come together to support this proposal.
 
 
 
@@ -73,22 +73,27 @@ After reading the proposal, we also recommend having a look at the [Related Prop
 
 Most of the systems we write nowadays (whether we want it or not) are distributed.
 
-They may use multiple processes and communicate between them and the parent process using some ICP (inter-process communication) mechanism. They may be part of a multi-service backend system and communicate between those nodes using various networking technologies. They may be a single service, however be spread out across multiple nodes in for availability and/or load-balancing reasons.
+Most of the systems we write nowadays (whether we want it or not) are distributed.
 
-These use-cases all vary significantly and have very different underlying transports and mechanisms that enable them. However, the general concept of wanting to communicate with non-local _identifiable_ entities is common in them all. Yet, each time the code looks tremendously different.
+For example:
+- They might have multiple processes with the parent process using some ICP (inter-process communication) mechanism. 
+- They might be part of a multi-service backend system that uses various networking technologies for communication between the nodes. 
+- They might be a single service, but spread out across multiple nodes for availability and/or load-balancing reasons.
+
+These use-cases all vary significantly and have very different underlying transports and mechanisms that enable them. Their implementations are also tremendously different. However, the general concept of wanting to communicate with non-local _identifiable_ entities is common in all of them. 
 
 Distributed actors provide an extension point in Swift's actor runtime that enables it to truly enable actors as a general conceptual model for asynchronous communication, regardless if in-process or not.
 
-This proposal _does not_ define any specific runtime, however it is designed such that various (first, and third-party) implementations of `ActorTransport`s allow distributed actors to fit whichever communication patterns suit the specific use-case.
+This proposal _does not_ define any specific runtime--it is designed such that various (first and third-party) implementations of transports (`ActorTransport`s) allow distributed actors to adapt whichever communication patterns that suit a specific use-case.
 
-To keep it more tangible, we focus on the following two transport types, which each have their unique requirements and have informed the design of this proposal:
+To keep things tangible, we will focus on the following two transport types, with each having their unique requirements and influence on the design of this proposal:
 
 - Network Actor Transports
-  - clustered server-side systems, simplifying implementation of scalable server-side systems and distributed algorithms,
-  - an alternative approach to RPC libraries, offering a more Swifty API while calling into known underlying RPC libraries.
+  - Clustered server-side systems, simplifying implementation of scalable server-side systems and distributed algorithms
+  - An alternative approach to RPC libraries, offering a more "Swifty" API while calling into known underlying RPC libraries
 - IPC Actor Transports
-  - on Apple platform's, XPC is the primary way applications communicate between daemons and apps, however it is lacking a truly great Swift API.
-  - on non-Apple platforms various different ICP mechanisms exist, and they may be implemented very differently, but essentially offer the same request/reply semantics.
+  - On Apple platform's, XPC is the primary way applications communicate between daemons and apps. However, it lacks a truly great Swift API.
+  - On non-Apple platforms various different ICP mechanisms exist, and they may be implemented very differently, but essentially they all offer the same request/reply semantics.
 
 ## Proposed solution
 
@@ -1185,4 +1190,3 @@ This proposal is ABI additive.
 ## Effect on API resilience
 
 **TODO:**
-
