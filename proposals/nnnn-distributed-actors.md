@@ -91,30 +91,23 @@ Distributed actors are declared using the `distributed actor` keywords, similar 
 
 Similarily to local-only actors which automatically conform to the `Actor` protocol, a type declared as `distributed actor` is implicitly conforming to the `DistributedActor` protocol. 
 
-Same as with the `Actor` protocol, it is not possible to implement the `DistributedActor` protocol manually. The only way to conform to `DistributedActor` is to declare a `distributed actor`. 
+Same as with the `Actor` protocol, it is not possible to implement the `DistributedActor` protocol manually. The only way to conform to `DistributedActor` is to declare a `distributed actor`. It is not possible to declare any other type (struct, actor, class, ...) and make it conform to the `DistributedActor` protocol manually for the same reasons as doing so is illegal for the Actor protocol: such type would be missing additional type-checking restrictions and synthesized pieces which are necessary for distributed actors to function properly.
 
 The distributed actor protocol is defined as:
 
 ```swift
 public protocol DistributedActor: Actor, ... {
-  
-  /// Create a new actor instance and register it with the passed in transport.
-  /// The this will automatically allocate and store an `ActorAddress` for this instance.
+
+  // << Discussed in detail in "Local DistributedActor initializer"
   init(transport: ActorTransport)
   
-  /// Resolve a (potentially remote) actor address against the passed in transport,
-  /// and return a reference to given actor.
-  /// 
-  /// << Discussed in detail in "Resolve initializer" >>
+  // << Discussed in detail in "Resolve initializer" >>
   init(resolve address: ActorAddress, using transport: ActorTransport)
   
-  /// Transport using which messages to this actor are to be transported (if remote).
-  /// << Discussed in detail in "ActorTransport" >>
+  // << Discussed in detail in "Actor Transports" >>
   var actorTransport: ActorTransport { get } 
     
-  /// The address, uniquely identifying this actor in a distributed setting.
-  /// 
-  /// An address typically will include a node/host pair, as well as some form of unique actor identifier.
+  // << Discussed in detail in "Actor Address"
   var actorAddress: ActorAddress { get }
 }
 ```
@@ -168,7 +161,7 @@ Swift's Distributed Actors help because we can explicitly mark such network inte
 
 ### Distributed Actor Initializers
 
-#### Local `DistributedActor` Initializer
+#### Local `DistributedActor` initializer
 
 All distributed actors automatically synthesize a special, required, initializer that accepts an `ActorTransport`. This initializer is _special_ and must not be overriden, and must be called into by all other constructors of such distributed actor. The synthesized initializer boils down to the following:
 
@@ -591,7 +584,7 @@ try await failer.letItCrash()
 
 This allows transports to implement failure detection mechanisms which are tailored to the specific underlying transport, e.g. for clustered applications one could make use of Swift Cluster Membership's [SWIM Failure Detector](https://www.github.com/apple/swift-cluster-membership), while for IPC mechanisms such as XPC more process-aware implementations can be provided. The exact guarantees and semantics of detecting failure will of course differ between those transports, which is why the transport must define how it handles those situations, while the language feature of distributed actors _must not_ define it any more specifically than discussed in this section.
 
-### ActorAddress
+### Actor Address
 
 A distributed actor's identity is defined by its `ActorAddress`.
 
