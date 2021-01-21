@@ -293,7 +293,7 @@ let greeting = try await greeter.greet("Alice")
 assert(greeting == "Hello, Alice!")
 ```
 
-Such a resolved reference SHOULD be a remote actor, since there is no local implementation the transport can "invent" to implement this protocol. We could imagine some transports using source generation and other tricks to fulfil this requirement, so this isn't stated as a MUST, however in any normal usage scenario the returned reference would be remote or the resolve should throw.
+Such a resolved reference (i.e., `greeter`) SHOULD be a remote actor, since there is no local implementation the transport can invent to implement this protocol. We could imagine some transports using source generation and other tricks to fulfil this requirement, so this isn't stated as a MUST, however in any normal usage scenario the returned reference would be remote or the resolve should throw.
 
 In other words, thanks to Swift's expressive protocols and isolation-checking rules applied to distributed functions and actors, we are able to use protocols as the interface description necessary to share functionality with other parties, even without sharing out implementations. There is no need to step out of the Swift language to define and share distributed system APIs with eachother.
 
