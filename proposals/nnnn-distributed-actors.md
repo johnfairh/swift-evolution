@@ -283,7 +283,7 @@ protocol Greeter: DistributedActor {
 
 Such protocol should not be able to define any non-distributed functions (not implemented yet), as it is strictly designated to define the distributed API of a distributed actor.
 
-And a "client" side application, even without knowlage of how the distributed actor is implemented on the "backend" may resolve it as follows:
+And a "client" side application, even without knowledge of how the distributed actor is implemented on the "backend" may resolve it as follows:
 
 ```swift
 let address: ActorAddress = ... // known to point at a remote `Greeter`
