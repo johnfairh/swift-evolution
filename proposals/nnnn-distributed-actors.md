@@ -193,7 +193,7 @@ func greet(who greeter: Greeter) {
 
 it is not _statically_ possible to determine if the actor is local or remote. This is hugely beneficial, as it allows us to write code independent of the location of the actors. We can write a complex distributed systems algorithm and test it locally. Deploying it to a cluster is merely a configuration and deployment change, without any additional code changes.
 
-This property is often referred to as *Location Transparency* ([wiki](https://en.wikipedia.org/wiki/Location_transparency)), which means that we address resources only by their identity, and not their specific location. This enables distributed actors to be moved between local and remote nodes, have them passivate when not in use, and is a key building block to powerful actor based abstractions (in the vein of Virtual Actors, as popularized by Orleans and Akka).
+This property is often referred to as *Location Transparency* ([wiki](https://en.wikipedia.org/wiki/Location_transparency)), which means that we address resources only by their identity, and not their specific location. This enables distributed actors to be moved between local and remote nodes, be passive when not in use, and is a key building block to powerful actor based abstractions (in the vein of Virtual Actors, as popularized by Orleans and Akka).
 
 > Future directions: We can expose `isLocal` (or rather `withLocal`) functionality, which allows dynamically determine if a distributed actor is local. This is rarely necessary, but it may enable specific types of usages which otherwise look a bit awkward.
 
