@@ -73,10 +73,9 @@ After reading the proposal, we also recommend having a look at the [Related Prop
 
 Most of the systems we write nowadays (whether we want it or not) are distributed.
 
-Most of the systems we write nowadays (whether we want it or not) are distributed.
 
 For example:
-- They might have multiple processes with the parent process using some ICP (inter-process communication) mechanism. 
+- They might have multiple processes with the parent process using some IPC (inter-process communication) mechanism. 
 - They might be part of a multi-service backend system that uses various networking technologies for communication between the nodes. 
 - They might be a single service, but spread out across multiple nodes for availability and/or load-balancing reasons.
 
@@ -93,7 +92,7 @@ To keep things tangible, we will focus on the following two transport types, wit
   - An alternative approach to RPC libraries, offering a more "Swifty" API while calling into known underlying RPC libraries
 - IPC Actor Transports
   - On Apple platform's, XPC is the primary way applications communicate between daemons and apps. However, it lacks a truly great Swift API.
-  - On non-Apple platforms various different ICP mechanisms exist, and they may be implemented very differently, but essentially they all offer the same request/reply semantics.
+  - On non-Apple platforms various different IPC mechanisms exist, and they may be implemented very differently, but essentially they all offer the same request/reply semantics.
 
 ## Proposed solution
 
@@ -199,19 +198,19 @@ This property is often referred to as *Location Transparency* ([wiki](https://en
 
 #### Progressive Disclosure towards Distributed Actors
 
-The introduction of `distributed actor` is purely incremental, and does not imply any changes to the local programming model as defined by `actor`. However, once developers understand the "share nothing" and "all communication through asynchronous functions (messages)", it is relatively simple to map the same understanding onto the distributed setting.
+The introduction of `distributed actor` is purely incremental, and does not imply any changes to the local programming model as defined by `actor`. However, once developers understand "share nothing" and "all communications are done through asynchronous functions (messages)", it is relatively simple to map the same understanding onto the distributed setting.
 
-None of the distributed systems aspects of distributed actors leak through to local-only actors, and developers who do not wish to use distributed actors, may simply ignore them.
+None of the distributed systems aspects of distributed actors leaks through to local-only actors. Developers who do not wish to use distributed actors may simply ignore them.
 
-Developers who first encounter a `distributed actor` in some API beyond their control can more easily learn about it if they have already seen actors in other pieces of their programs, since the same mental model applies to distributed as well as local-only actors. The big difference being the inclusion of serialization and networking, this however can be quickly understood with the general "it will be slower than a local call" intuition. This is no different from having _some_ asynchronous functions performing "very heavy" work (like sending HTTP requests by calling `httpClient.post(<file upload>)`) while some other async functions are relatively fast -- developers always need to reason about _what_ a function does in any case to understand performance characteristics.
+Developers who first encounter `distributed actor` in some API beyond their control can more easily learn about it if they have already seen actors in other parts of their programs, since the same mental model applies to distributed as well as local-only actors. The big difference is the inclusion of serialization and networking, but it can be quickly understood with the general "it will be slower than a local call" intuition. This is no different from having _some_ asynchronous functions performing "very heavy" work (like sending HTTP requests by calling `httpClient.post(<file upload>)`) while some other asynchronous functions are relatively fast--developers always need to reason about _what_ a function does in any case to understand performance characteristics.
 
-Swift's Distributed Actors help because we can explicitly mark such network interaction heavy objects as distributed actors, and therefore we know that distributed functions are going to use e.g. networking, so invoking it repeatedly loops may not be the best idea. Xcode and other IDEs can make use of this static information to even highlight distributed actor functions in some color, helping developers understand where exactly networking costs are to be expected.
+Swift's Distributed Actors help because we can explicitly mark such network interaction heavy objects as `distributed actor`s, and therefore we know that distributed functions are going to use e.g. networking, so invoking them repeatedly in loops may not be the best idea. Xcode and other IDEs can make use of this static information to e.g. highlight distributed actor functions, helping developers understand where exactly networking costs are to be expected.
 
 ### Distributed Actor Initializers
 
 #### Local `DistributedActor` initializer
 
-All distributed actors automatically synthesize a special, required, initializer that accepts an `ActorTransport`. This initializer is _special_ and must not be overriden, and must be called into by all other constructors of such distributed actor. The synthesized initializer boils down to the following:
+All distributed actors automatically synthesize a required initializer that accepts an `ActorTransport`. This initializer is _special_ and must not be overridden, and must be called into by all other initializers of such distributed actor. The synthesized initializer boils down to the following:
 
 ```swift
 distributed actor Greeter {
@@ -228,9 +227,9 @@ distributed actor Greeter {
 }
 ```
 
-Customization of this initializer itself is _not_ allowed, however it is permittable to define other initializers which accept additional parameters etc. They all must eventually invoke this transport initializer. It is special because of the binding of the actor instance and the transport. Thanks to this guarantee, the actor transport _always_ knows about all instances it was asked to manage. This is important as it allows us to trust that any `resolve(address:)` performed by the transport, will correctly yield the appropriate actor reference, or throw.
+Customization of this initializer itself is _not_ allowed, however it is permittable to define other initializers which accept additional parameters etc. They all must eventually invoke this transport initializer. It is special because of the binding of the actor instance and the transport. Thanks to this guarantee, the actor transport _always_ knows about all instances it was asked to manage. This is important as it allows us to trust that any `resolve(address:)` performed by the transport will correctly yield the appropriate actor reference, or throw.
 
-Some actor types may be designed with the assumption of a specific transport. It is possible to either check and throw/fatalError in such cases in a auxiliary initializer.
+Some actor types may be designed with the assumption of a specific transport. It is possible to either check and `throw`/`fatalError` in such cases in an auxiliary initializer.
 
 In which case all instances of such actor will use the `BestTransport`. This is useful when a project uses only a single transport, and never uses multiple transports within the same project.
 
@@ -240,7 +239,7 @@ While we warn against abusing this pattern as it makes it impossible to e.g. tes
 
 A special "resolve initializer" is synthesized for distributed actors. It is not implementable manually, and invokes internal runtime functionality for allocating "proxy" actors which is not possible to achieve in any other way.
 
-A resolve initializer takes the shape of `init(resolve: ActorAddress, using: ActorTransport)`
+A resolve initializer takes the shape of `init(resolve: ActorAddress, using: ActorTransport)`:
 
 ```swift
 distributed actor Greeter {
@@ -260,11 +259,11 @@ distributed actor Greeter {
 
 A resolve MAY throw when the transport decides that it cannot resolve the passed in address. A common example of a transport throwing would be if the address is for some protocol `unknown://` while the transport only can resolve `known://` actor addresses.
 
-The resolve initializer, and related resolve function on the `ActorTransport` are _not_ `async` because they must be able to be invoked from decoding values, and the Codable infrastructure is not async-ready just yet. Also, for most use-cases they need not be asynchronous as the resolve is usually implemented well enough using local-knowledge. In the future we might want to introduce an asynchronous variant of resolving actors which would simplify implementing transports as actors themselves, as well as enable more complicated resolve processes.
+The resolve initializer and related resolve function on the `ActorTransport` are _not_ `async` because they must be able to be invoked from decoding values, and the `Codable` infrastructure is not async-ready just yet. Also, for most use-cases they need not be asynchronous as the resolve is usually implemented well enough using local knowledge. In the future we might want to introduce an asynchronous variant of resolving actors which would simplify implementing transports as actors themselves, as well as enable more complicated resolve processes.
 
 A transport MAY decide to return a "dead reference" meaning that the address currently points at an "already dead actor" and it may decide to instead of throwing, whose only purpose is to receive all messages aimed to the original address and _log that they are being dropped_. This concept is can be useful in debugging actor lifecycles, where we accidentally didn't keep the actor alive as long as we hoped etc. It is up to each specific transport to document and implement either behavior.
 
-A resolve initializer MAY transparently create an instance if it decides it is the right thing to do. This is how concepts like "virtual actors" may be implemented: we never actively create an actor instance, but it's creation and lifecycle is managed for us by some server-side component with which the transport communicates. Virtual actors and their specific semantics are outside of the scope of this proposal, but remain an important potential future direction of these APIs.
+A resolve initializer MAY transparently create an instance if it decides it is the right thing to do. This is how concepts like "virtual actors" may be implemented: we never actively create an actor instance, but its creation and lifecycle is managed for us by some server-side component with which the transport communicates. Virtual actors and their specific semantics are outside of the scope of this proposal, but remain an important potential future direction of these APIs.
 
 ##### Resolve initializer for Distributed Actor protocols
 
