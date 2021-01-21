@@ -6,6 +6,53 @@
 * Status: **Implementation in progress**
 * Implementation: [PR ####](https://github.com/ktoso/swift/tree/wip-distributed-actors-prime)
 
+## Table of Contents
+
+- [Distributed Actors](#distributed-actors)
+  * [Introduction](#introduction)
+  * [Motivation](#motivation)
+  * [Proposed solution](#proposed-solution)
+    + [Distributed Actors](#distributed-actors-1)
+  * [Detailed design](#detailed-design)
+    + [Distributed Actors](#distributed-actors-2)
+    + [Location Transparency](#location-transparency)
+      - [Progressive Disclosure towards Distributed Actors](#progressive-disclosure-towards-distributed-actors)
+    + [Distributed Actor Initializers](#distributed-actor-initializers)
+      - [Local `DistributedActor` initializer](#local--distributedactor--initializer)
+      - [Resolve Initializer](#resolve-initializer)
+      - [Resolve initializing Distributed Actor protocols](#resolve-initializing-distributed-actor-protocols)
+      - [Distributed Actor "Proxy" instance allocation](#distributed-actor--proxy--instance-allocation)
+    + [Distributed Functions](#distributed-functions)
+      - [`distributed func` declarations](#-distributed-func--declarations)
+      - [`distributed func` internals](#-distributed-func--internals)
+    + [Distributed Actor Isolation](#distributed-actor-isolation)
+      - [1. No permissive special case for accessing constant `let` properties](#1-no-permissive-special-case-for-accessing-constant--let--properties)
+      - [2. `Codable` parameters and return values](#2--codable--parameters-and-return-values)
+      - [3. Distributed functions must be `throws`](#3-distributed-functions-must-be--throws-)
+    + [Actor Transports](#actor-transports)
+      - [Transporting `Error`s](#transporting--error-s)
+    + [Actor Address](#actor-address)
+      - [(Distributed) Actors are `Equatable` and `Hashable`](#-distributed--actors-are--equatable--and--hashable-)
+      - [Distributed Actors are `Codable`](#distributed-actors-are--codable-)
+    + ["Known to be local" distributed actors](#-known-to-be-local--distributed-actors)
+    + [Future Direction](#future-direction)
+      - [Swift Distributed Tracing integration](#swift-distributed-tracing-integration)
+      - [Distributed `Deadline` propagation](#distributed--deadline--propagation)
+      - [Potential Transport Candidates](#potential-transport-candidates)
+      - [Support for `AsyncSequence`](#support-for--asyncsequence-)
+    + [Actor Supervision](#actor-supervision)
+  * [Related Proposals](#related-proposals)
+  * [Alternatives Considered](#alternatives-considered)
+    + [Infer that "`distributed func`" automatically is `throws`](#infer-that---distributed-func---automatically-is--throws-)
+    + [Discussion: Why Distributed Actors are better than "just" some RPC library?](#discussion--why-distributed-actors-are-better-than--just--some-rpc-library-)
+    + [Special Actor spawning APIs](#special-actor-spawning-apis)
+      - [Explicit `spawn(transport)` keyword-based API](#explicit--spawn-transport---keyword-based-api)
+      - [Global eagerly initialized transport](#global-eagerly-initialized-transport)
+      - [Directly adopt Akka-style Actors References `ActorRef<Message>`](#directly-adopt-akka-style-actors-references--actorref-message--)
+  * [Source compatibility](#source-compatibility)
+  * [Effect on ABI stability](#effect-on-abi-stability)
+  * [Effect on API resilience](#effect-on-api-resilience)
+
 ## Introduction
 
 
@@ -242,7 +289,7 @@ A transport MAY decide to return a "dead reference" meaning that the address cur
 
 A resolve initializer MAY transparently create an instance if it decides it is the right thing to do. This is how concepts like "virtual actors" may be implemented: we never actively create an actor instance, but it's creation and lifecycle is managed for us by some server-side component with which the transport communicates. Virtual actors and their specific semantics are outside of the scope of this proposal, but remain an important potential future direction of these APIs.
 
-#### Resolve initializing Distributed Actor protocols
+##### Resolve initializer for  Distributed Actor protocols
 
 In some situations it may be impossible to share the implementation of a distributed actor (the `distributed actor` definition) between "server" and "client". We can imagine a situation where we want to offer users of our system easy access to it using distributed actors, however we do not want to share our internal implementation thereof. This functions similarily to how one might want to publish API definitions, but not the actual API implementations. Other RPC runtimes solve this by externalizing the protocol definition into external interface description languages (IDLs), such as `.proto` files in the case of gRPC.
 
@@ -276,7 +323,7 @@ In other words, thanks to Swift's expressive protocols and isolation-checking ru
 
 > TODO: This is not implemented yet, and a bit more tricky however unlocks amazing use cases for when client/server are not the same team or organization.
 
-#### Distributed Actor "Proxy" instance allocation
+##### Distributed Actor "Proxy" instance allocation
 
 Creating a proxy for an actor type is done using a special `init(resolve:using:)` initializer of a distributed actor. Internally, it invokes the transports resolve function, which determines if 
 
