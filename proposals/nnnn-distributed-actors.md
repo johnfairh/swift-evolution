@@ -57,7 +57,7 @@ This proposal introduces the `distributed` contextual keyword, which may be used
 
 This keyword enables a few additional restrictions to what the typesystem already is checking in terms of actor isolation (more details below), and liberates those actors from their local affinity, allowing them to exist across process and network boundaries, fully embracing the message-passing nature of actors.
 
-Instead of implementing time and time again logic around serializing, sending over the network, receiving, and then serializing the same payloads as many of us do today, distributed actors allow us to encapsulate all of the serialization and message passing logic in a transport and regain our focus on the focus on logic.
+Instead of implementing time and time again logic around serializing, sending over the network, receiving, and then serializing the same payloads as many of us do today, distributed actors allow us to encapsulate all of the serialization and message passing logic in a transport and regain our focus on the function logic.
 
 You could imagine a `Player` actor (such as in the [SwiftShot](https://developer.apple.com/documentation/arkit/swiftshot_creating_a_game_for_augmented_reality) sample app from WWDC18), to be expressed as a distributed actor. Instead of having the code related to serializing, deserializing, and sending actions a player performs throughout tens of classes, we can capture the logic where it belongs, as part of the player distributed actor:
 
@@ -89,7 +89,7 @@ Rather than having to manually implement:
 
 Distributed actors are declared using the `distributed actor` keywords, similar to local-only actors which are declared using only the `actor` keyword.
 
-Similarily to local-only actors which automatically to the `Actor` protocol, a type declared as `distributed actor` is implicitly conforming to the `DistributedActor` protocol. 
+Similarily to local-only actors which automatically conform to the `Actor` protocol, a type declared as `distributed actor` is implicitly conforming to the `DistributedActor` protocol. 
 
 Same as with the `Actor` protocol, it is not possible to implement the `DistributedActor` protocol manually. The only way to conform to `DistributedActor` is to declare a `distributed actor`. 
 
@@ -121,7 +121,7 @@ public protocol DistributedActor: Actor, ... {
 
 The `DistributedActor` protocol includes a few more conformances which will be discussed in depth in their own dedicated sections, as we discuss the importance of the [actor address](#actor-address) property.
 
-The `actorTransport` and `actorAddress` are immutable, and MUST NOT change during the lifetime of the specifc actor instance. Equality as well as messaging internals rely on this guarantee.
+The `actorTransport` and `actorAddress` are immutable, and MUST NOT change during the lifetime of the specific actor instance. Equality as well as messaging internals rely on this guarantee.
 
 A `distributed actor` as well as extensions on it are the only places where `distributed func` declarations are allowed. This is because in order to implement a distributed function, a transport and identity (actor address) are necessary. 
 
@@ -133,7 +133,7 @@ It is not allowed to define global actors which are distributed actors. If enoug
 
 ### Location Transparency
 
-When an actor is declared using the distributed keyword, like so `distributed actor Greeter {}` it is referred to as a "distributed actor". References to distributed actors, at runtime, can be either "local" or a "remote":
+When an actor is declared using the distributed keyword, like so `distributed actor Greeter {}` it is referred to as a "distributed actor". At runtime references to distributed actors can be either "local" or "remote":
 
 - **local** `distributed actor` references: are semantically the same as a non-distributed `actor` at runtime. They have the `transport` property and are `Codable` as their actor address (discussed below), however all isolation and execution semantics are exactly the same as plain-old local-only actor references.
 - **remote** `distributed actor` references: on which invocations of `distributed func` are actually implemented as message sends over the stored `transport`. It is up to the transport and frameworks using this infrastructure to define what serialization and networking (or IPC) mechanism is used for the messaging. Semantically, it is indistinguishable from "just an actor," since in the actor model, all communication between actors occurs via asynchronous messaging.
@@ -150,7 +150,7 @@ func greet(who greeter: Greeter) {
 }
 ```
 
-it is not _statically_ possible to determine if the actor is local or remote. This is hugely beneficial, as it allows us to write code generic over the location of such actors–i.e. we can write a complex distributed systems algorithm and test it locally with zero changes to the code, and deploying it to a cluster is merely a configuration and deployment change, without any additional code changes.
+it is not _statically_ possible to determine if the actor is local or remote. This is hugely beneficial, as it allows us to write code independent of the location of the actors–i.e. we can write a complex distributed systems algorithm and test it locally and deploying it to a cluster is merely a configuration and deployment change, without any additional code changes.
 
 This property is often referred to as *Location Transparency* ([wiki](https://en.wikipedia.org/wiki/Location_transparency)), which means that we address resources only by their identity, and not their specific location. This enables distributed actors to be moved between local and remote nodes, have them passivate when not in use, and is a key building block to powerful actor based abstractions (in the vein of Virtual Actors, as popularized by Orleans and Akka).
 
