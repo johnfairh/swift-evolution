@@ -267,7 +267,7 @@ A resolve initializer MAY transparently create an instance if it decides it is t
 
 ##### Resolve initializer for Distributed Actor protocols
 
-In some situations it may be impossible to share the implementation of a distributed actor (the `distributed actor` definition) between "server" and "client". We can imagine a situation where we want to offer users of our system easy access to it using distributed actors, however we do not want to share our internal implementation thereof. This functions similarily to how one might want to publish API definitions, but not the actual API implementations. Other RPC runtimes solve this by externalizing the protocol definition into external interface description languages (IDLs), such as `.proto` files in the case of gRPC.
+In some situations it may be impossible to share the implementation of a distributed actor (the `distributed actor` definition) between "server" and "client". We can imagine a situation where we want to offer users of our system easy access to it using distributed actors, however we do not want to share our internal implementation thereof. This works similarly to how one might want to publish API definitions, but not the actual API implementations. Other RPC runtimes solve this by externalizing the protocol definition into external interface description languages (IDLs), such as `.proto` files in the case of gRPC.
 
 With Swift, we already have a great way to define protocols... protocols!
 
