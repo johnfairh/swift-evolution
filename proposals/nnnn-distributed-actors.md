@@ -103,7 +103,7 @@ This proposal introduces the `distributed` contextual keyword, which may be used
 
 This keyword enables a few additional restrictions to what the typesystem is already checking in terms of actor isolation (more details below), and liberates those actors from their local affinity - allowing them to exist across process and network boundaries, fully embracing the message-passing nature of actors.
 
-Instead of implementing time and time again the logic around serializing, sending over the network, receiving, and then serializing the same payloads as many of us do today, distributed actors allow us to encapsulate all of the serialization and message passing logic in a transport and regain our focus on the functional logic.
+Instead of implementing time and time again the same logic around serializing/deserializing payloads and sending/receiving over the network as many of us do today, distributed actors allow us to encapsulate all of the serialization and message passing logic in a transport and regain our focus on the functional logic.
 
 Let's imagine a `Player` actor (such as in the [SwiftShot](https://developer.apple.com/documentation/arkit/swiftshot_creating_a_game_for_augmented_reality) sample app from WWDC18) being expressed as a distributed actor. Instead of having the code related to serialization and sending actions that a player performs scattered across dozens of classes, we can capture the logic where it belongs, as part of the `Player` distributed actor:
 
