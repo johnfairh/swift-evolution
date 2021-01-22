@@ -652,7 +652,7 @@ distributed actor Greeter {
 }
 ```
 
-Addressess are created by a specific `ActorTransport` which will usually implement them using a `struct` carrying any of the fields that are necessary for it to function, for example, a "Net Actors" framework would implement the protocol like this:
+Addressess are created by a specific `ActorTransport` which will usually implement them using a `struct` carrying any of the fields that are necessary for it to function. For example, a "Net Actors" framework would implement the protocol like this:
 
 ```swift
 public struct NetActorAddress: ActorAddress { 
@@ -716,7 +716,7 @@ Distributed actors are `Codable` and are represented as their _actor address_  i
 
 In order to be true to the actor model's idea of freely shareable references, regardless of their location (known as the property of [*location transparency*](#location-transparency)), we need to be able to pass distributed actor references to other–potentially remote–distributed actors.
 
-This implies that distributed actors must be `Codable`. However, the way that encoding and decoding is to be implemented differs tremendously for actors and non-actors. Specifically, it does not make sense to serialize the actor's state - it is after all wha it is isolating from the outside world, and external access 
+This implies that distributed actors must be `Codable`. However, the way that encoding and decoding is to be implemented differs tremendously for actors and non-actors. Specifically, it does not make sense to serialize the actor's state - it is after all what is isolated from the outside world and from external access.
 
 The `DistributedActor` protocol also conforms to `Codable`. As it does not make sense to encode/decode "the actor", per se, the actor's encoding is specialized to what it actually intends to express: encoding an address, that can be resolved on a remote node, such that the remote node can contact this actor. This is exactly what the `ActorAddress` is used for, and thankfully it is an immutable private property of each actor, so the synthesis of Codable of a distributed actor boils down to encoding its' address:
 
@@ -736,7 +736,7 @@ Decoding is slightly more involved, because it must be triggered from _within_ a
 
 In order for decoding of an Distributed Actor to work on every layer of such decoding process, a special `CodingUserInfoKey.actorTransport` is used to store the actor transport in the Decoder's `userInfo` property, such that it may be accessed by any decoding step in a deep hierarchy of encoded values. If a distributed actor reference was sent as part of a message, this means that it's `init(from:)` will be invoked with the actor transport present. 
 
-The default synthesized decoding conformance therefore automatically, without any additional user intervention, can decode itself when being decoded from the context of any actor transport. The synthesized initializer looks roughtly like this:
+The default synthesized decoding conformance can therefore automatically, without any additional user intervention, decode itself when being decoded from the context of any actor transport. The synthesized initializer looks roughly like this:
 
 ```swift
 extension DistributedActor {
@@ -757,9 +757,9 @@ extension DistributedActor {
 }
 ```
 
-During decoding of such reference, the transport gets called again and shall attempt to `resolve` the actors address. If it is a local actor known to the transport, it will return its reference. If it is a remote actor, it will return a proxy instance pointing at this address. If the address is illegal or unrecognized by the transport, this operation will throw and fail decoding the message.
+During decoding of such reference, the transport gets called again and shall attempt to `resolve` the actor's address. If it is a local actor known to the transport, it will return its reference. If it is a remote actor, it will return a proxy instance pointing at this address. If the address is illegal or unrecognized by the transport, this operation will throw and fail decoding the message.
 
-To show an example what this looks like in practice, we might implement an actor cluster transport, where the actor addressess are a form of URIs, uniquely identifying the actor instance, and as such encoding an actor turns it into `"[transport-name]://system@10.0.0.1:7337/Greeter#349785`, or using some other encoding scheme, depending on the transport used.
+To show an example of what this looks like in practice, we might implement an actor cluster transport, where the actor addresses are a form of URIs, uniquely identifying the actor instance, and as such encoding an actor turns it into `"[transport-name]://system@10.0.0.1:7337/Greeter#349785`, or using some other encoding scheme, depending on the transport used.
 
 It is tremendously important to allow passing actor references around, across distributed boundaries, because unlike local-only actors, distributed actors can not rely on passing a closure to another actor to implement "call this later, please" style patterns. We are not, and do not want to, venture into the world of serializing and sending around closures. 
 
@@ -830,7 +830,7 @@ The `ActorTransport` will be explained in depth in the detailed design sections,
 
 ### "Known to be local" distributed actors
 
-Usually programming with distributed actors means assuming that an actor may be remote, and thus only codable parameters/return types may be used with it. This is a sound and resilient model, however it sometimes becomes an annoying limitation when an actor is "known to be local".
+Usually programming with distributed actors means assuming that an actor may be remote, and thus only `Codable` parameters/return types may be used with it. This is a sound and resilient model, however it sometimes becomes an annoying limitation when an actor is "known to be local".
 
 This situation sometimes ocurs when developing a form of manager actor which always has a single local instance per cluster node, but also is reachable by other nodes as a distributed actor. Since the actor is defined as distributed, we can only send messages which can be encoded to it, however sometimes such APIs have a few specialized local functions which make sense locally, but are never actually sent remotely. We do want to have these local-only messages to be handled by exactly the same actor as the remote messages, to avoid race conditions and accidental complexity from splitting it up into multiple actors.
 
@@ -845,7 +845,7 @@ public distributed actor Proposer<Value: Codable> {
 }
 ```
 
-Leaving the exact implementation details aside, such APIs sometimes arise and can either be addressed by wrapping e.g. the closure in some `NotActuallyCodable { value in ... }` wrapper (similar to how `UnsafeTransfer` is proposed in raw concurrency isolation and the `ConcurrentValue` design documents) which pretends to be Codable but actually crashes if one were to actually try encoding it. 
+Leaving the exact implementation details aside, such APIs sometimes arise and can either be addressed by wrapping e.g. the closure in some `NotActuallyCodable { value in ... }` wrapper (similar to how `UnsafeTransfer` is proposed in raw concurrency isolation and the `ConcurrentValue` design documents) which pretends to be `Codable` but actually crashes if one were to actually try encoding it. 
 
 This is sub-optimal because technically, we can make mistakes and accidentally invoke such functions on an actor that actually was remote, causing the process to crash. Rather we would like to express the assumption directly: "*assuming this actor is local, I want to be able to invoke it using the local actor rules, without the restrictions imposed by the additional distributed actor checking*".
 
@@ -979,9 +979,9 @@ It would be very natural, and has been considered and ensured that it will be po
 
 #### Support for `AsyncSequence`
 
-This isn't really somethign that the language will need much more support for, as it is mostly handled in the `ActorTransport` and serialization layers, however it is worth pointing out here.
+This isn't really something that the language will need much more support for, as it is mostly handled in the `ActorTransport` and serialization layers, however it is worth pointing out here.
 
-It is possible to implement (and we have done so in other runtimes in the past), to implement distributed references to streams, which may be consumed across the network, including the support for flow-control/back-pressure and cancelation.
+It is possible to implement (and we have done so in other runtimes in the past), distributed references to streams, which may be consumed across the network, including the support for flow-control/back-pressure and cancelation.
 
 This would manifest in returning / accepting values conforming to the AsyncSequence or some more specific marker protocol. Distributed actors can then be used as coordinators and "sources" e.g. of metrics or log-lines across multiple nodes -- a pattern we have seen sucessfully applied in other runtimes in the past.
 
