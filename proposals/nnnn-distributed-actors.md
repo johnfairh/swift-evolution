@@ -161,7 +161,7 @@ public protocol DistributedActor: Actor, ... {
 
 The `DistributedActor` protocol includes a few more conformances which will be covered in depth in their own dedicated sections, as we discuss the importance of the [actor address](#actor-address) property.
 
-`actorTransport` and `actorAddress` are immutable, and MUST NOT change during the lifetime of the specific actor instance. Equality as well as messaging internals rely on this guarantee.
+`actorTransport` and `actorAddress` are immutable, and *must not* change during the lifetime of the specific actor instance. Equality as well as messaging internals rely on this guarantee.
 
 A `distributed actor` and extensions on it are the only places where `distributed func` declarations are allowed. This is because in order to implement a distributed function, a transport and identity (actor address) are necessary.
 
@@ -257,13 +257,13 @@ distributed actor Greeter {
 }
 ```
 
-A resolve MAY throw when the transport decides that it cannot resolve the passed in address. A common example of a transport throwing would be if the address is for some protocol `unknown://` while the transport only can resolve `known://` actor addresses.
+A resolve may throw when the transport decides that it cannot resolve the passed in address. A common example of a transport throwing would be if the address is for some protocol `unknown://` while the transport only can resolve `known://` actor addresses.
 
 The resolve initializer and related resolve function on the `ActorTransport` are _not_ `async` because they must be able to be invoked from decoding values, and the `Codable` infrastructure is not async-ready just yet. Also, for most use-cases they need not be asynchronous as the resolve is usually implemented well enough using local knowledge. In the future we might want to introduce an asynchronous variant of resolving actors which would simplify implementing transports as actors themselves, as well as enable more complicated resolve processes.
 
-A transport MAY decide to return a "dead reference" meaning that the address currently points at an "already dead actor" and it may decide to instead of throwing, whose only purpose is to receive all messages aimed to the original address and _log that they are being dropped_. This concept is can be useful in debugging actor lifecycles, where we accidentally didn't keep the actor alive as long as we hoped etc. It is up to each specific transport to document and implement either behavior.
+A transport may decide to return a "dead reference" instead of throwing when resolution fails. Such "dead reference" sometimes is useful when debugging lifecycle races, and allows to log messages intended for the already-dead  actor, rather than failing resolution, making it harder to debug the specific timing with respect to other messages which were meant to, but never had a chance to be delivered to their (dead) recipient. This pattern is entirely optional and most transports are expected to throw upon failing to resolve an address. The pattern has proven very useful in runtimes such as Akka which always employ this strategy when resolving actor addresses, so we wanted to acknowlage that it is possible to implement it using our transport proposal if necessary.
 
-A resolve initializer MAY transparently create an instance if it decides it is the right thing to do. This is how concepts like "virtual actors" may be implemented: we never actively create an actor instance, but its creation and lifecycle is managed for us by some server-side component with which the transport communicates. Virtual actors and their specific semantics are outside of the scope of this proposal, but remain an important potential future direction of these APIs.
+A resolve initializer may transparently create an instance if it decides it is the right thing to do. This is how concepts like "virtual actors" may be implemented: we never actively create an actor instance, but its creation and lifecycle is managed for us by some server-side component with which the transport communicates. Virtual actors and their specific semantics are outside of the scope of this proposal, but remain an important potential future direction of these APIs.
 
 ##### Resolve initializer for Distributed Actor protocols
 
@@ -281,7 +281,7 @@ protocol Greeter: DistributedActor {
 }
 ```
 
-Such protocol should not be able to define any non-distributed functions (not implemented yet), as it is strictly designated to define the distributed API of a distributed actor.
+Such protocol should only define distributed functions and as it is strictly designated to define the distributed API of a distributed actor. (This feature is pending implementation, and requires synthesis of a "proxy instance"). A proxy instance for a distributed actor protocol can never implement non-distributed functions, however since the proxy is always _remote_ the it is impossible to invoke non-local instances of a distributed protocol instanciated proxy actor, as the it will never be local, and thus `whenLocalActor { ...}` will never run (which would have allowed calling such un-implemented functions).
 
 And a "client" side application, even without knowledge of how the distributed actor is implemented on the "backend" may resolve it as follows:
 
@@ -293,7 +293,7 @@ let greeting = try await greeter.greet("Alice")
 assert(greeting == "Hello, Alice!")
 ```
 
-Such a resolved reference (i.e., `greeter`) SHOULD be a remote actor, since there is no local implementation the transport can invent to implement this protocol. We could imagine some transports using source generation and other tricks to fulfil this requirement, so this isn't stated as a MUST, however in any normal usage scenario the returned reference would be remote or the resolve should throw.
+Such a resolved reference (i.e., `greeter`) *should* be a remote actor, since there is no local implementation the transport can invent to implement this protocol. We could imagine some transports using source generation and other tricks to fulfil this requirement, so this isn't stated as a must, however in any normal usage scenario the returned reference would be remote or the resolve should throw.
 
 In other words, thanks to Swift's expressive protocols and isolation-checking rules applied to distributed functions and actors, we are able to use protocols as the interface description necessary to share functionality with other parties, even without sharing out implementations. There is no need to step out of the Swift language to define and share distributed system APIs with eachother.
 
@@ -317,8 +317,6 @@ protocol ActorTransport {
 		where Act: DistributedActor
 }
 ```
-
-This function can only be invoked on specific actor types–as usual with static functions on protocols–and serves as a factory function for actor proxies of given specific type. 
 
 Implementing the resolve function by returning `.resolved(instance)` allows the transport to return known local actors it is aware of. Otherwise, if it intends to proxy messages to this actor through itself it should return `.proxy`, instructing the constructor to only construct a partial "proxy" instance using the address and transport. The transport may also chose to throw, in which case the constructor will rethrow the error, e.g. explaining that the passed in address is illegal or malformed.
 
@@ -356,15 +354,15 @@ distributed actor Greeter {
 }
 ```
 
-A distributed function MUST have all its parameters conform to `Codable`. It is legal for a distributed function to have zero parameters. 
+A distributed function *must* have all its parameters conform to `Codable`. It is legal for a distributed function to have zero parameters. 
 
 All parameter and return value types of a distributed function must conform to `Codable`. 
 
-It is allowed to declare `Void` returning distributed functions. It is up to the `ActorTransport` to decide (and document) the exact timing semantics and guarantees for when an `await` on such call will complete. i.e. some transports (e.g. IPC mechanisms) may actually perform a full roundtrip call before completing the waiting call (i.e. `await call()` would only complete once the callee has been called and completed). Other transports MAY treat these as uni-directional messages, and _not_ await a complete request/reply cycle before resuming the suspension point of such call. This is beneficial for typical uni-directional, at-most-once delivery semantics calls which sometimes come in handy in distributed systems. Such uni-directional calls also free the transport from having to perform any timeout and failure detection -- uni-directional sends MAY be implemented as best-effort uni-directional message send (e.g. the message is considered _sent_ once the message is put into a datagram (udp) and flushed, without the need for waiting for an acknowlagement). Having said that, the precise details are up to the `ActorTransport ` to define and document such that their users understand their semantics. 
+It is allowed to declare `Void` returning distributed functions. It is up to the `ActorTransport` to decide (and document) the exact timing semantics and guarantees for when an `await` on such call will complete. i.e. some transports (e.g. IPC mechanisms) may actually perform a full roundtrip call before completing the waiting call (i.e. `await call()` would only complete once the callee has been called and completed). Other transports may treat these as uni-directional messages, and _not_ await a complete request/reply cycle before resuming the suspension point of such call. This is beneficial for typical uni-directional, at-most-once delivery semantics calls which sometimes come in handy in distributed systems. Such uni-directional calls also free the transport from having to perform any timeout and failure detection -- uni-directional sends may be implemented as best-effort uni-directional message send (e.g. the message is considered _sent_ once the message is put into a datagram (udp) and flushed, without the need for waiting for an acknowlagement). Having said that, the precise details are up to the `ActorTransport ` to define and document such that their users understand their semantics. 
 
 In the future we may consider some form of `distributed(unidirectional) func` or similar, which could inform both developer and transport code generators what is expected from this function.
 
-All distributed functions must be declared as **`async throws`**  because the transport may need to decide to cancel a call, due to network issues, timeouts, or other transport issues. Errors thrown out of this function MAY be determined by the `ActorTransport`.
+All distributed functions must be declared as **`async throws`**  because the transport may need to decide to cancel a call, due to network issues, timeouts, or other transport issues. Errors thrown out of this function may be determined by the `ActorTransport`.
 
 Distributed function **invocations** are transformed by source generated actor transport frameworks into some specific encoding of the **message**. It is up to the `ActorTransport` to determine how to disambiguate. In general, messages are defined by their full signature. For example, the following two declarations are expected to be encoded as different messages, and each cause an invocation of the appropriate function on the receiving (remote) actor:
 
