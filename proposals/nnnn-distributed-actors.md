@@ -373,7 +373,7 @@ distributed func greet(name: String) async throws -> String
 distributed func greet(who name: String) async throws -> String 
 ```
 
-as with normal Swift code, it is required that the transport framework encodes the invocation of those functions in such way that they don't get "mixed up." To clarify, it is only the first parameter name which matters for the resolution, the second name should not matter, and be ignored by transport frameworks.
+As with normal Swift code, it is required that the transport framework encodes the invocation of those functions in such way that they don't get "mixed up." To clarify, it is only the first parameter name which matters for the resolution, the second name should not matter, and be ignored by transport frameworks.
 
 #### `distributed func` internals
 
