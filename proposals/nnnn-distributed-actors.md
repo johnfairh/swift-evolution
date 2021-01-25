@@ -295,13 +295,13 @@ assert(greeting == "Hello, Alice!")
 
 Such a resolved reference (i.e., `greeter`) *should* be a remote actor, since there is no local implementation the transport can invent to implement this protocol. We could imagine some transports using source generation and other tricks to fulfil this requirement, so this isn't stated as a must, however in any normal usage scenario the returned reference would be remote or the resolve should throw.
 
-In other words, thanks to Swift's expressive protocols and isolation-checking rules applied to distributed functions and actors, we are able to use protocols as the interface description necessary to share functionality with other parties, even without sharing out implementations. There is no need to step out of the Swift language to define and share distributed system APIs with eachother.
+In other words, thanks to Swift's expressive protocols and isolation-checking rules applied to distributed functions and actors, we are able to use protocols as the interface description necessary to share functionality with other parties, even without sharing out implementations. There is no need to step out of the Swift language to define and share distributed system APIs with each other.
 
 > TODO: This is not implemented yet, and a bit more tricky however unlocks amazing use cases for when client/server are not the same team or organization.
 
 ##### Distributed Actor "Proxy" instance allocation
 
-Creating a proxy for an actor type is done using a special `init(resolve:using:)` initializer of a distributed actor. Internally, it invokes the transport's `resolve` function, which determines if 
+Creating a proxy for an actor type is done using a special `init(resolve:using:)` initializer of a distributed actor. Internally, it invokes the transport's `resolve` function, which determines if this will initializer will returning a local instance, or if it should return a "proxy" instance.
 
 ```swift
 protocol DistributedActor { 
@@ -319,6 +319,8 @@ protocol ActorTransport {
 ```
 
 Implementing the resolve function by returning `.resolved(instance)` allows the transport to return known local actors it is aware of. Otherwise, if it intends to proxy messages to this actor through itself it should return `.proxy`, instructing the constructor to only construct a partial "proxy" instance using the address and transport. The transport may also chose to throw, in which case the constructor will rethrow the error, e.g. explaining that the passed in address is illegal or malformed.
+
+A proxy instance does not allocate storage for any of the actor defined properties, i.e. it is a simple proxy that only takes as much memory as the transport and actor address take. In other words, a proxy instance is like an empty shell, delegating all calls to the remote incarnation of the actor, all those delegations are performed by transforming calls on the actor into messages, which the transport delivers to the remote actor.
 
 The `resolve` function is intentionally not asynchronous, in order to invoke it from inside `decode` implementations, as they may need to decode actor addresses into actor references.
 
