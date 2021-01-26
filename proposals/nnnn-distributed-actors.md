@@ -318,7 +318,7 @@ In other words, thanks to Swift's expressive protocols and isolation-checking ru
 
 ##### Distributed Actor "Proxy" instance allocation
 
-Creating a proxy for an actor type is done using a special `init(resolve:using:)` initializer of a distributed actor. Internally, it invokes the transport's `resolve` function, which determines if this will initializer will returning a local instance, or if it should return a "proxy" instance.
+Creating a proxy for an actor type is done using a special `init(resolve:using:)` initializer of a distributed actor. Internally, it invokes the transport's `resolve` function, which determines if the initializer will return a local instance, or if it should return a "proxy" instance.
 
 ```swift
 protocol DistributedActor { 
@@ -460,13 +460,13 @@ We are not set on a naming scheme for the `$distributed_` functions just yet, an
 
 ### Distributed Actor Isolation
 
-Distributed actor isolation inherits all the isolation properties of local-only actors, removes a few one local-only special-case and adds two additional restrictions to the model. In the following sections we will discuss them one-by one to fully grasp why they are necessary.
+Distributed actor isolation inherits all the isolation properties of local-only actors, removes one local-only special-case and adds two additional restrictions to the model. In the following sections we will discuss them one-by one to fully grasp why they are necessary.
 
 #### 1. No permissive special case for accessing constant `let` properties
 
 Distributed actors remove the special case that exists for local-only actors, where access is permitted to such actor's properties as long as they are immutable `let` properties.
 
-Local-only actors in Swift make a special case to permit _synchronous_ access to _constant properties_, e.g. `let name: String`, since they are known to be safe to access and cannot be modified either so for the sake of concurrency safety, such access is permissible. Such loosening of the actor model is _not_ permissible for distributed actors, because these properties must are potentially remote, and any such access would have to be asynchronous and involve networking.
+Local-only actors in Swift make a special case to permit _synchronous_ access to _constant properties_, e.g. `let name: String`. Since these cannot be modified, for the sake of concurrency safety such access is permissible. Such loosening of the actor model is _not_ permissible for distributed actors, because these properties are potentially remote, and any such access would have to be asynchronous and involve networking.
 
 Specifically, the following is permitted under Swift's local-only actors model:
 
@@ -598,7 +598,7 @@ Instead, logic errors should be modelled by returning `Result<User, InvalidPassw
 
 Generally, it is encouraged to separate the "any failure" handling related to transport failures (such as timeouts or network errors), which are represented by the untyped `throws` of a distributed function call, from logical errors (e.g. "invalid password").
 
-The exact errors thrown by a distributed function depends on the underlying transport. Generally one should expect some form of `TheTransportError` to be thrown by a distributed function if transport errors occur--the exact semantics of those throws are intentionally left up to specific transports to document when and how to expect errors to be thrown.
+The exact error thrown by a distributed function depends on the underlying transport. Generally one should expect some form of `TheTransportError` to be thrown by a distributed function if a transport error occurs--the exact semantics of those throws are intentionally left up to specific transports to document when and how to expect errors to be thrown.
 
 To provide more tangible examples, why a transport may want to throw even if the called function does not, consider the following:
 
@@ -1085,7 +1085,7 @@ One might argue that, similar to `async` being infered on actor functions _if ca
 
 While this may be a highly subjective and sensitive topic, we want to tackle the question up-front, so why are distributed actors better than ""just" some RPC library?
 
-The answer lies in the language integration and the mental model developers can work with when working with distributed actors. Swift already embraces actors for its local concurrency programming, and they will be omni-present and become a familiar and useful tool for developers. It is also important to notice that any aync function may be technically performing work over network, and it is up to developers to manage such calls in order to not overwhelm the network etc. With distributed actors, such calls are more _visible_ because IDEs have the necessary information to e.g. underline or otherwise hightlight that a function is likely to hit the network and one may need to consider it's latency more, than if it was just a local call. IDEs and linters can even use this statically available information to write hints such as "hey, you're doing this distributed actor call in a tight loop - are you sure you want to do that?"
+The answer lies in the language integration and the mental model developers can work with when working with distributed actors. Swift already embraces actors for its local concurrency programming, and they will be omni-present and become a familiar and useful tool for developers. It is also important to notice that any async function may be technically performing work over the network, and it is up to developers to manage such calls in order to not overwhelm the network, etc. With distributed actors, such calls are more _visible_ because IDEs have the necessary information to underline or otherwise highlight that a function is likely to hit the network and one may need to consider it's latency more than if it was just a local call. IDEs and linters can even use this statically available information to write hints such as "hey, you're doing this distributed actor call in a tight loop - are you sure you want to do that?"
 
 Distributed actors, unlike "raw" RPC frameworks, help developers to think about their distributed applications in terms of a network of collaborating actors, rather than having to think and carefully manage every single serialization call and network connection management between many connected peers - which we envision to be more and more important in the future of device and server programming et al. You may also refer to the [Swift Concurrency Manifesto; Part 4: Improving system architecture](https://gist.github.com/lattner/31ed37682ef1576b16bca1432ea9f782#part-4-improving-system-architecture) section on some other ideas on the topic.
 
@@ -1107,7 +1107,7 @@ This would be fairly consistent and leaves a natural extension point for additio
 
 #### Global eagerly initialized transport
 
-One way to avoid having to pass a transport to every distributed actor on creation, would be to use some global state to register the transport to be used by all distributed actors in the process. This _seems_ like a good idea at first, but actually is a terrible idea - based on experience from moving an actor system implementation from global to non-global state over many years (during the Akka 1 to 2 series transition, as well as years of migrating off global state and problems caused by it by the Play framework).
+One way to avoid having to pass a transport to every distributed actor on creation, would be to use some global state to register the transport to be used by all distributed actors in the process. This _seems_ like a good idea at first, but actually is a terrible idea - based on experience from moving an actor system implementation from global to non-global state over many years (during the Akka 1 to 2 series transition, as well as years of migrating off global state and problems caused by the Play framework).
 
 The idea is similar in spirit to what SSWG projects do with bootstraping logging, metrics, and tracing systems: 
 
@@ -1119,7 +1119,7 @@ let greeter = DistributedGreeter()
 
 While _at first glance_ this seems nice, the negative implications of such global state are numerous:
 
-- It is hard to know by browsing the code what transprot the greeter will use,
+- It is hard to know by browsing the code what transport the greeter will use,
   - if a transport were passed in via constructor (as implemented by this proposal) it is simpler to understand where the messages will be sent, e.g. via XPC, or some networking mechanism.
 - The system would have to crash the actor creation if no transport is bootstrapped before the greeter is initialized.
 - Since global state is involved, all actor spawns would need to take a lock when obtaining the actor reference. We would prefer to avoid such locking in the core mechanisms of the proposal.
