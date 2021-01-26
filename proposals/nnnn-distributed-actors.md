@@ -231,7 +231,7 @@ protocol Greeter: DistributedActor {
 
 Such protocol can only define distributed functions and as it is strictly designated to define the distributed API of a distributed actor. 
 
-> **Note:** (This feature is pending implementation, and requires synthesis of a "proxy instance"). A proxy instance for a distributed actor protocol can never implement non-distributed functions, however since the proxy is always _remote_ the it is impossible to invoke non-local instances of a distributed protocol instanciated proxy actor, as the it will never be local, and thus `whenLocalActor { ...}` will never run (which would have allowed calling such un-implemented functions).
+> **Note:** (This feature is pending implementation, and requires synthesis of a "proxy instance"). A proxy instance for a distributed actor protocol can never implement non-distributed functions, however, since the proxy is always _remote_. It is impossible to invoke non-local instances of a proxy actor instantiated via the distributed protocol, as it will never be local, and thus `whenLocalActor { ...}` will never run (which would have allowed calling such un-implemented functions).
 
 ### Distributed Actor Initializers
 
