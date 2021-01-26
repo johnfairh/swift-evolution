@@ -30,12 +30,13 @@ After reading the proposal, we also recommend having a look at the [Related Prop
 
 Most of the systems we write nowadays (whether we want it or not) are distributed.
 
+Distributed programming is notoriously hard, and solutions offered in the space are often one-off solutions weaved throughout the application, often poluting the applications domain logic with concerns of serialization, networking, concurrency and failure handling. Distributed actors offer a way to centralize the complexity related to messaging in actor transports, and keep the domain logic of applications clean and focused on their business needs.
 
-For example:
-- They might have multiple processes with the parent process using some IPC (inter-process communication) mechanism. 
-- They might be part of a multi-service backend system that uses various networking technologies for communication between the nodes. 
-- They might be a single service, but spread out across multiple nodes for availability and/or load-balancing reasons.
-- They might be devices such as iPhones and iPads, communicating either between eachother for peer-to-peer games or interactive experiences, or communicating with a server-side system.
+
+Some examples of how many systems we build today are already distributed, and will only continue to be even more so in the future. Today's systems often fall in one, or many, of these categories: 
+- multiple processes with the parent process using some IPC (inter-process communication) mechanism to isolate work from the main process.
+- multi-service backend system that uses various networking technologies for communication between the nodes. This includes micro-service architectures, as well as large services running on multiple nodes.
+- multiple devices, such as iPhones, iPads, Macs, Watches and numerous other HomeKit enabled IoT devices communicating either between each other for peer-to-peer games, interactive experiences, or communicating with a  server-side component of the same system.
 
 These use-cases all vary significantly and have very different underlying transports and mechanisms that enable them. Their implementations are also tremendously different. However, the general concept of wanting to communicate with non-local _identifiable_ entities is common in all of them. 
 
@@ -45,8 +46,10 @@ To keep things tangible, we will focus on the following two use-cases, with each
   - Clustered server-side systems, simplifying implementation of scalable server-side systems and distributed algorithms
   - An alternative approach to RPC libraries, offering a more "Swifty" API while calling into known underlying RPC libraries
 - IPC Actor Transports
-  - On Apple platform's, XPC is the primary way applications communicate between daemons and apps. However, it lacks a truly great Swift API.
+  - On Apple platform's, XPC is the primary way applications communicate between daemons and apps. Existing APIs such as libxpc and NSXPC not offer a truly great experience when used with Swift, as they are unaware of Codable and Swift's runtime in general.
   - On non-Apple platforms various different IPC mechanisms exist, and they may be implemented very differently, but essentially they all offer the same request/reply semantics.
+
+All of those use cases are well served by the introduction of a very extensible distributed actor model to the language. The proposal is purposefully open for extension, allowing all these use cases to define their specific actor transports and serialization mechanisms, building on top of Swift's core features: `Codable` and the new Actor runtime.
 
 ## Proposed solution
 
@@ -60,15 +63,55 @@ End-users and library developers can implement their own custom actor transports
 
 This proposal _does not_ define any specific runtime--it is designed such that various (first and third-party) implementations of transports (`ActorTransport`s) allow distributed actors to adapt whichever communication patterns that suit a specific use-case.
 
-### Distributed Actors
+### Overview: Distributed Actors
 
-This proposal introduces the `distributed` contextual keyword, which may be used in conjunction with actor definitions (`distributed actor`), as well as `distributed func` declarations within such actors.
+This proposal introduces the `distributed` contextual keyword, which may be used to declare *distributed actors*, like this: 
 
-This keyword enables a few additional restrictions to what the typesystem is already checking in terms of actor isolation (more details below), and liberates those actors from their local affinity - allowing them to exist across process and network boundaries, fully embracing the message-passing nature of actors.
+```swift
+distributed actor Greeter {}
+```
+
+A distributed actor is the *only* type which may contain distributed functions, which are declared using the same contextual keyword `distributed`, but in front of a function declaraion, like this:
+
+```swift
+distributed actor Greeter { 
+  distributed func hello() -> String { "" } 
+}
+```
+
+The `distributed` contextual keyword enables a few additional type-checking requirements for such declarations (discussed in [Distributed Actor Isolation](#distributed-actor-isolation)), strengthening the actor-isolation rules such that they make sense in a distributed setting. By imposing more restrictions to such types and functions, it liberates distributed actors from their local affinity–allowing them to exist across process and network boundaries, fully embracing the message-passing nature of actors.
+
+Distributed actors also automatically conform to `Equatable`, `Hashable` and `Codable` for reasons we'll discuss in depth in [ActorAddress](#actor-address). If necessary, it is possible to provide your own conformance, disabling the synthesis feature. However in practice, there is almost no possible reasonalby useful other implementation fot those protocols other than the already synthesized one, which heavily rely on the special treatment of the address property which will be discussed in that section.
 
 Instead of implementing time and time again the same logic around serializing/deserializing payloads and sending/receiving over the network as many of us do today, distributed actors allow us to encapsulate all of the serialization and message passing logic in a transport and regain our focus on the functional logic.
 
-Let's imagine a `Player` actor (such as in the [SwiftShot](https://developer.apple.com/documentation/arkit/swiftshot_creating_a_game_for_augmented_reality) sample app from WWDC18) being expressed as a distributed actor. Instead of having the code related to serialization and sending actions that a player performs scattered across dozens of classes, we can capture the logic where it belongs, as part of the `Player` distributed actor:
+For example in the [SwiftShot](https://developer.apple.com/documentation/arkit/swiftshot_creating_a_game_for_augmented_reality) sample app from WWDC18, there are many pieces of code similar to the following:
+
+````swift
+let newData = GrabInfo(grabbableID: grabbable.grabbableID, cameraInfo: data.cameraInfo)
+delegate.dispatchToPlayer(gameAction: .releaseEnd(newData), player: player)
+````
+
+Where the developer first needs to:
+
+- maintain a `GameAction` enum which lists all possible actions (messages) that may be dispatched,
+- has to interact with an `InteractionDelegate` to dispatch messages "to" the player, rather than invoking a call on the player,
+- manually prepare the `GrabInfo` which actually expresses the parameters of the game action being dispatched,
+- implement lookup and message dispatch and routing in the delegate.
+
+The delegate implementation uses a few abstraction layers, and eventually uses a it's own `NetworkSession` type, which eventually ends up using MultipeerConnectivity to send the bytes to other players. The NetworkSession type defined by SwiftShot is not unlike an `ActorTransport` that is being proposed in this pitch, however the prime difference being that an `ActorTransport` is *generally* re-usable and applicable for all kinds of applications, binding it with the actor model that the language already endorses.
+
+We omit the specifics of the few layers of abstraction present in `SwiftShot` to make it well structured, however the amount of boilerplate, abstractions and conventions about what a message is, how a message dispatch should look like ("functions which end with `to player:`") make it fairly entangled with the domain of the app. It also means that while the patterns and practices shown by SwiftShow are *good*, because it is only a pattern to follow, and not a general principled programming model, it is hard to "learn once, use use everywhere". This is what distributed actors bring to the table–a learn the actor model once, implement various actor transports, use everywhere approach to distributed programming–regardless of actual transport being used.
+
+Not only that, but distributed actors allow us to express such distributed calls more naturally. Rather than inventing naming patterns that we have to follow, weaving networks sessions, delegates, message enums and player represesentations all together, we can invoke `releaseEnd` with the apropriate parameters on a distributed player actor, et voila!
+
+````swift
+try await player.releaseEnd(grabbable: grabbable, cameraInfo: data.cameraInfo)
+````
+
+This looks much nicer, and allows us to focus on the actual domain logic: the player and what we want to pass to it.
+
+We can define such player actor using the following, familiar, syntax which only adds a single extra `distributed` keyword in front of the actor and function declarations:
 
 ```swift
 distributed actor Player {
@@ -85,49 +128,128 @@ distributed actor Player {
 distributed actor Item { ... }
 ```
 
-Compare `Player` to having to manually implement:
+All of the serialization and networking logic will be automatically dispatched to from such call site, and we'll learn more in the upcoming sessions how exactly this is achieved. 
 
-- defining "game action" enums which represent e.g. grabbing an item,
-- declaring delegate protocols which get called when game actions happen,
-- implementing encoding/decoding of the game actions to/from their wire representations,
-- implementing logic to route incoming messages to the appropriate player.
+We will explore all specific semantics and implementation details of a distributed actor in the upcoming sections. However let us first step back and learn what makes this all click, and how it has a proven track record in distributed systems programming.
 
 ### Location Transparency
 
-When an actor is declared using the `distributed` keyword (`distributed actor Greeter {}`), it is referred to as a "distributed actor". At runtime, references to distributed actors can be either "local" or "remote":
+Any invocation made on a distributed actor must respect the [Distributed Actor Isolation](#distributed-actor-isolation) rules, which are a super-set of local-only Actor Isolation rules. The additional rules are discussed in depth below, but they mostly boil down to allowing only distributed functions to be invoked on such actors. 
 
-- **local** `distributed actor` references: these are semantically the same as non-distributed `actor`s at runtime. They have the `transport` property and `Codable` as their actor address (discussed below), however all isolation and execution semantics are exactly the same as plain-old local-only actor references.
-- **remote** `distributed actor` references: `distributed func`s invoked these are actually implemented as messages sent over the stored `transport`. It is up to the transport and frameworks using this infrastructure to define what serialization and networking (or IPC) mechanism are used for the messaging. Semantically, it is indistinguishable from "just an actor," since in the actor model, all communication between actors occurs via asynchronous messaging.
+At runtime a distributed actor reference can point either at a *local* or *remote* actor instance.
 
-It is by design, that by looking at a piece of code like this:
+It is–by design–not possible to _statically_ determine if a specific actor reference is local or remote. 
 
-```swift
-distributed actor Greeter {
-  distributed func hello() async throws
-}
-
-func greet(who greeter: Greeter) {
-  await greeter.hello()
-}
-```
-
-it is not _statically_ possible to determine if the actor is local or remote. This is hugely beneficial, as it allows us to write code independent of the location of the actors. We can write a complex distributed systems algorithm and test it locally. Deploying it to a cluster is merely a configuration and deployment change, without any additional code changes.
+This crucial restriction proves to be hugely beneficial, as it allows us to write code independent of the location of the actors. We can write a complex distributed systems algorithm and test it locally, and later on deploy it to a cluster is merely a configuration and deployment change, without any additional code changes.
 
 This property is often referred to as [*Location Transparency*](https://en.wikipedia.org/wiki/Location_transparency), which means that we address resources only by their identity, and not their specific location. This enables distributed actors to be moved between local and remote nodes, be passive when not in use, and is a key building block to powerful actor based abstractions (in the vein of Virtual Actors, as popularized by Orleans and Akka).
 
-> Future directions: We can expose `isLocal` (or rather `withLocal`) functionality, which allows dynamically determine if a distributed actor is local. This is rarely necessary, but it may enable specific types of usages which otherwise look a bit awkward.
+To summrize this section with an example, let us have a look at the following `Greeter` definition, and the `test` function accepting a `greeter` reference:
+
+```swift
+distributed actor Greeter {
+  distributed func hello() -> String { ... }
+}
+
+func test(greeter: Greeter) {
+  let greeting = await greeter.hello()
+  print("greeting")
+}
+```
+
+It is by design that we do not know, and should not care (!) in the general case, if greeter is actually a remote actor or not. All we need to know is that it _might be_. As such any distributed actor refernece, in the same way as a suspension point marked with `await`, is only a marker for the _potential_ that something more interesting may be happening here: in async/await the `await` means the function _might_ suspend, and in distributed actors a `distributed` call means the call _might_ be a remote call.
+
+This also allows us to test and develop complex distributed systems locally, and then deploy them into peer-to-peer, clustered, or client/server environments without having to re-design the entire application logic.
+
+In the detailed design section ["Known to be local" distributed actors](#known-to-be-local-distributed-actors) we will introduce an advanced feature called `whenLocalActor` which enables dynamically checking if a reference is local. While very rare, there may be situations in which we need to isolate state in a single actor, and iteract with it in some special local-only way, e.g. providing it with a closure it should use for incoming distributed calls, which would not otherwise be possible to do nicely with the limitations imposed by distributed functions. Although one can always wrap such closure in a `Codable` wrapper that throws if it actually were to be serialized, such solution is pretty inelegant, and `whenLocalActor` offers a clean solution to those rare situations when we need to peek through the location transparency property of distributed actors.
 
 #### Progressive Disclosure towards Distributed Actors
 
-The introduction of `distributed actor` is purely incremental, and does not imply any changes to the local programming model as defined by `actor`. However, once developers understand "share nothing" and "all communications are done through asynchronous functions (messages)", it is relatively simple to map the same understanding onto the distributed setting.
+The concept of `distributed actor` is purely additive to the language, and does not imply any changes to the *programming model* as introduced by `actor`. In fact, the programming model remains the same between local-only actors and distributed actors, as well!
 
-None of the distributed systems aspects of distributed actors leaks through to local-only actors. Developers who do not wish to use distributed actors may simply ignore them.
+Once developers understand "share nothing" and "all communications are done through asynchronous functions (messages)" way of thinking that the actor model embraces, it is relatively simple to map the same understanding onto the distributed setting.
 
-Developers who first encounter `distributed actor` in some API beyond their control can more easily learn about it if they have already seen actors in other parts of their programs, since the same mental model applies to distributed as well as local-only actors. The big difference is the inclusion of serialization and networking, but it can be quickly understood with the general "it will be slower than a local call" intuition. This is no different from having _some_ asynchronous functions performing "very heavy" work (like sending HTTP requests by calling `httpClient.post(<file upload>)`) while some other asynchronous functions are relatively fast--developers always need to reason about _what_ a function does in any case to understand performance characteristics.
+None of the distributed systems aspects of distributed actors leak through to local-only actors, and developers who do not wish to use distributed actors may simply ignore them.
+
+Developers who first encounter `distributed actor` in some API beyond their control can more easily learn about it if they have already seen actors in other parts of their programs, since the same mental model applies to distributed as well as local-only actors. The big difference is the inclusion of serialization and networking, but it can be quickly understood with the general "it will be slower than a local call, and may fail" intuition. This is no different from having _some_ asynchronous functions performing "very heavy" work (like sending HTTP requests by calling `httpClient.post(<file upload>)`) while some other asynchronous functions are relatively fast--developers always need to reason about _what_ a function does in any case to understand performance characteristics.
 
 Swift's Distributed Actors help because we can explicitly mark such network interaction heavy objects as `distributed actor`s, and therefore we know that distributed functions are going to use e.g. networking, so invoking them repeatedly in loops may not be the best idea. Xcode and other IDEs can make use of this static information to e.g. highlight distributed actor functions, helping developers understand where exactly networking costs are to be expected.
 
-### Distributed Actor Proxies
+### Overview: Distributed Actor Functions
+
+At the core of this design lies the capability to turn function invocations into serialized representations which may be shipped off onto the network or other transport mechanism.
+
+Distributed functions can *only* be defined within
+
+- a `distributed actor` declaration,
+- extensions of a distributed actor type (e.g. `extension Greeter`). 
+  - The extension itself does not have to be–and can not be– marked as `distributed`.
+
+It is *not* allowed to mark stored or computed properties, subscripts, initializers od deinitializers as distributed.
+
+Distributed functions become *implicitly* **async** and **throwing** when invoked from *outside* of the declaring actor. 
+
+This is similar in spirit to how synchronous functions declared on actors implicitly are `async` when invoked from outside of the actor. This is because the existence of network calls within an implementation of a remote actor call implies the call may fail due to reasons outside of the actor implementation's control (e.g. network failure).
+
+The implicit async effect when invoked from outside of the actor instance is directly inherited from the actor semantics proposed by the Swift Actors proposal. The implicit throwing is an additional implicit effect, and is required because of network calls which are used to implement such calls may fail, and there must be a way to un-suspend an actor from such failed call.
+
+Please note that if the target distributed function is throwing as well, the `Error` thrown on the callee may not be possible to deliver to the caller. For this to be possible, the thrown error must be `Codable` itself and the used transport must provide specific handling of this case. Generally we recommend to not rely on "distributed throws" but rather type them as a `Result<Ok, SpecificError>` as then returning back the error to the caller is much more efficient, and can will be enforced at compile time that the `SpecificError` is Codable as well. This way we can avoid suprises where we thought we should get back an error, however it was not Codable and thus it would not be shipped back to the caller.
+
+Let us use an example to showcase the isolation rules in practice:
+
+```swift
+distributed actor Caplin { 
+  
+  func local_syncHello() -> String { ... }
+  func local_asyncHello() async -> String { ... }
+  func local_asyncThrowsHello() async throws -> String { ... }
+  
+  distributed func syncHello() -> String { ... }
+  distributed func asyncHello() async -> String { ... }
+  distributed func asyncThrowsHello() async throws -> String { ... }
+}
+```
+
+Invoking these functions from the outside of the actor will result in the following:
+
+```swift
+let caplin = Caplin(transport: CoolTransport())
+
+// outside of the actor:
+_ = try await caplin.syncHello() // implicitly async throws
+_ = try await caplin.asyncHello() // implicitly async throws
+_ = try await caplin.asyncThrowsHello() // implicitly async throws
+
+// error: await caplin.local_syncHello()
+// error: await caplin.local_asyncHello()
+// error: await caplin.local_asyncThrowsHello()
+//
+// the error message would be:
+// cannot invoke distributed actor-isolated non-distributed function '...' 
+//        on potentially  potentially remote distributed actor 'caplin'
+```
+
+Invoking the same functions from the inside of the actor, will allow us to invoke the non-distributed functions as well. Not only that, but the implicitly async/throwing effects of the distributed functions also no longer apply, since we "are the actor" so there is no networking going on between those invocations.
+
+```swift
+extension Caplin { 
+  func test() async throws {
+    _ = caplin.syncHello() // no implicit effects
+    _ = await caplin.asyncHello() // no implicit effects
+    _ = try await caplin.asyncThrowsHello() // no implicit effects
+
+    _ = caplin.local_syncHello() // ok
+    _ = await caplin.local_asyncHello() // ok
+    _ = try await caplin.local_asyncThrowsHello() // ok
+  }
+}
+```
+
+In addition to that, distributed functions require that all their parameter and return types conform to `Codable`. 
+
+This should come to no suprise–after all, those functions will be transformed into messages that will be put on the wire, and as such, we must be able to encode and decode them.
+
+### Overview: Distributed Actor Proxies
 
 In order to efficiently implement references to remote actors, we propose the introduction of proxy distributed actor instances.
 
@@ -164,15 +286,11 @@ This is a very powerful technique, and allows us to program "heavy" actors which
 
 A popular use case for this is a "hot" representation of e.g. a shopping cart, where we keep an actor in memory to represent the card as long as the user remains on the check-out page (or on the site / in the app), as the actor stores all operations the user performs, we need not go back and forth to the database all the time when refreshing the page, we can use the actor as a form of specialized hot cache. If the user goes away, the actor can automatically passivate and flush changes to some actual persistent storage etc.
 
-### Distributed Actor Functions
+### Overview: Actor Transports
 
-TODO:
+Last but not least, this proposal introduces the concept of an `ActorTransport`.
 
-- explain in depth what functions are
 
-#### Transporting Errors
-
-TODO
 
 ## Detailed design
 
@@ -235,7 +353,7 @@ protocol Greeter: DistributedActor {
 
 Such protocol can only define distributed functions and as it is strictly designated to define the distributed API of a distributed actor. 
 
-> **Note:** (This feature is pending implementation, and requires synthesis of a "proxy instance"). A proxy instance for a distributed actor protocol can never implement non-distributed functions, however, since the proxy is always _remote_. It is impossible to invoke non-local instances of a proxy actor instantiated via the distributed protocol, as it will never be local, and thus `whenLocalActor { ...}` will never run (which would have allowed calling such un-implemented functions).
+> **Note:** (This feature is pending implementation, and requires synthesis of a "proxy instance"). A proxy instance for a distributed actor protocol can never implement non-distributed functions, however, since the proxy is always _remote_.
 
 ### Distributed Actor Initializers
 
@@ -839,7 +957,7 @@ distributed actor Greeter {
 
 The `ActorTransport` will be explained in depth in the detailed design sections, in general though the transport is to be considered an actor local value, which is not intended to be shared with other actors (i.e. unmovable). While the `self.transport.address` is possible to be shared with other actors, or even stored by them. It is a common pattern to store a set of known actors or addresses, in order to maintain a "watched" set of actors, which we can use to check incoming addresses against--is this message from a "new" actor, or one which I already have seen and stored in my "watched" set? These kinds of situations come up frequently in distributed system programming, and it is useful to be able to store addresses, with detachment to any actual reference to the real remote actor.
 
-### "Known to be local" distributed actors
+### "Known to be local" distributed actors and `whenLocalActor{}`
 
 Usually programming with distributed actors means assuming that an actor may be remote, and thus only `Codable` parameters/return types may be used with it. This is a sound and resilient model, however it sometimes becomes an annoying limitation when an actor is "known to be local".
 
@@ -858,9 +976,9 @@ public distributed actor Proposer<Value: Codable> {
 
 Leaving the exact implementation details aside, such APIs sometimes arise and can either be addressed by wrapping e.g. the closure in some `NotActuallyCodable { value in ... }` wrapper (similar to how `UnsafeTransfer` is proposed in raw concurrency isolation and the `ConcurrentValue` design documents) which pretends to be `Codable` but actually crashes if one were to actually try encoding it. 
 
-This is sub-optimal because technically, we can make mistakes and accidentally invoke such functions on an actor that actually was remote, causing the process to crash. Rather we would like to express the assumption directly: "*assuming this actor is local, I want to be able to invoke it using the local actor rules, without the restrictions imposed by the additional distributed actor checking*".
+This is sub-optimal, because we can make mistakes and accidentally invoke such functions on an actor that actually was remote, causing the process to crash. 
 
-We could offer a function to inspect and perform actions when the actor reference indeed is local like this:
+Rather we would like to express the assumption directly: "*assuming this actor is local, I want to be able to invoke it using the local actor rules, without the restrictions imposed by the additional distributed actor checking*".And this is exactly the semantics offered by the `whenLocalFunction`:
 
 ```swift
 extension DistributedActor { 
@@ -877,12 +995,16 @@ The `whenRemote` optional body can be used to provide an alternative or default 
 Which can be used like this:
 
 ```swift
-distributed actor Greeter { func tell(_ message: String) { print(message) } }
+distributed actor Greeter {
+  let someProperty: String = "Hello!" // not 'distributed'
+  func localOnly(_ message: String) { print(message) }  // not 'distributed'
+}
 let greeter: Greeter = Greeter(transport: someTransport)
 let greeter2: Greeter = try Greeter(resolve: address, transport: someTransport)
 
-greeter.whenLocalActor { greeterWasLocal in 
-  greeterWasLocal.tell("It is local, after all!")
+// error: greeter.localOnly("") // cannot invoke non-distributed function [...]
+await greeter.whenLocalActor { greeterWasLocal in 
+  await greeterWasLocal.localOnly("It is local, after all!")
 }
 
 assert(greeter == greeter2)
@@ -892,11 +1014,12 @@ assert(greeter === greeter2)
 And thanks to the [forward-scaning of trailing closures](https://github.com/apple/swift-evolution/blob/main/proposals/0286-forward-scan-trailing-closures.md#proposed-solution), a convenient syntax to use the whenRemote branch emerges:
 
 ```swift
-let accessibleOnlyLocally = greeter.whenLocalActor { local in 
-  local.localOnly // e.g. some let constant
-} whenRemote { remoteAfterAll in
-  nil 
-}
+let accessibleOnlyLocally: String? = greeter
+  .whenLocalActor { local in 
+    local.someProperty // e.g. some let constant
+  } whenRemote { remoteAfterAll in
+    nil
+  }
 ```
 
 This allows us to keep using the actor as isolation and "linearization" island, keep the distributed protocol implementations simple and not suffer from accidental complexity.
@@ -1192,7 +1315,7 @@ let greeting = await greeter.greet(who: "Alice", in: "en")
 
 
 
-There are **many** fantastic lessons, patterns and ideas developed by the Akka community–many of which inspire this proposal–however, it is limited in its expression power, because it is _just a library_. In contrast, this effort here is colaborative with the compiler infrastructure, including type checking, and thread-safety, concurrency model hooks and code generation built-into the language on various layers of the project. 
+There are **many** fantastic lessons, patterns and ideas developed by the Akka community–many of which inspire this proposal–however, it is limited in its expression power, because it is _just a library_. In contrast, this effort here is collaborative with the compiler infrastructure, including type checking, and thread-safety, concurrency model hooks and code generation built-into the language on various layers of the project. 
 
 Needless to say, what we are able to achieve API wise and also because who the target audience of this project is, we are taking different tradeoffs in the API design - favoring a more language integrated model, for the benefit of feeling natural for the developers first discovering actor model programming. By doing so, we aim to provide a model that, as Akka has in the past, will mature well over the next 10 years, as systems become more and more distributed and programming such systems becomes more commonplace than ever before.
 
