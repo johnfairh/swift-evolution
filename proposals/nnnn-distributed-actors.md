@@ -367,7 +367,7 @@ It is not allowed to define global actors which are distributed actors. If enoug
 
 ### Distributed Actor Protocols
 
-> Note: This is an advanced feature which may need to be scoped out of the initial implementation, depending on timing concerns. However it is a tremendously important one in the long run.
+> Note: This is an advanced feature which may be scoped out of the initial implementation. However it is a tremendously important one in the long run, so it is important to address it in this pitch as well.
 
 In some situations it may be impossible to share the implementation of a distributed actor (the `distributed actor` definition) between "server" and "client". We can imagine a situation where we want to offer users of our system easy access to it using distributed actors, however we do not want to share our internal implementation thereof. This works similarly to how one might want to publish API definitions, but not the actual API implementations. Other RPC runtimes solve this by externalizing the protocol definition into external interface description languages (IDLs), such as `.proto` files in the case of gRPC.
 
@@ -384,6 +384,8 @@ protocol Greeter: DistributedActor {
 ```
 
 Such protocol can *only* define distributed functions and as it is strictly designated to define the distributed API of a distributed actor. Attempts to declare property requirements, subscripts or other declarations which cannot be `@distributed` will cause compile time errors.
+
+Such protocols are a form of "service definition", and we may need to provide additional capabilities wrt. API evolution and requirements on types which may participate in it. This is an area we are looking into and will share more in the future.
 
 ### Distributed Actor Initializers
 
@@ -413,6 +415,37 @@ Some actor types may be designed with the assumption of a specific transport. It
 In which case all instances of such actor will use the `BestTransport`. This is useful when a project uses only a single transport, and never uses multiple transports within the same project.
 
 While we warn against abusing this pattern as it makes it impossible to e.g. test code in a distributed-yet-on-the-same-host setting, which can be very useful in writing tests for distributed algorithms. However we acknowledge that the simplification from not having to always pass the transport to all distributed initializers is a nice win in smaller and not-so-distributed projects, e.g. if a project only ever uses distributed actors to communicate with it's daemon co-process using XPC.
+
+##### User-defined local initializers
+
+As the local initializer is special and automatically synthesized by the compiler, such that the contract between a distributed actor and its transport is always correctly implemented, it means that other local initializers of a distributed actor *must* invoke the local initializer.
+
+Such initializers are equivalent to `convenience` initializers, and the local initializer is effectively a designated initializer.
+
+This means that other initializers of a distributed actor must be declared as follows:
+
+```swift
+distributed actor Worker { 
+  let max: Int 
+  
+  convenience init(max: Int, transport: ActorTransport) {
+    self.init(transport: transport)
+    self.max = max
+  }
+}
+```
+
+Forgetting to mark the initializer as convenience results in the following error in the current implementation: `'distributed actor' initializer 'init(max:transport:)' must be 'convenience' initializer. Distributed actors have an implicitly synthesized designated 'init(transport:)' local initializer, which other initializers must delegate to.`
+
+Inside such initializer, the call to `self.init(transport: transport)` is enforced as well, because all local initializers must invoke it. This follows the same rules as designated and convenience initializers in classes.
+
+> **NOTE:** We would be quite willing to provide more sugar here; The presence of "``convenience`" initializers somewhat leaks that actors are special form of classes inside the implementation, and developers don't necessarily need to be made aware of this.
+>
+> We could do the following if the core team would be ok with it: allow `init(max:transport:)` without `convenience` and yet require the semantics of having to call an initializer that will eventually call `init(transport:)` anyway. We are not sure which way is better, on one hand designated and convenience initializers are already known concepts to Swift developers, on the other though, it may be adding more noise than necessary?
+
+Next we will discuss the "resolve" synthesized initializer. 
+
+While we're discussing user-defined initializers though, it is worth calling out that it is illegal to invoke the resolve initializer on `self` - it is a very special initializer which results in potentially a "proxy" being allocated rather than a real object, and thus invoking it on `self` would make this process increadibly suspicious and potentially unsafe and thus is not allowed.
 
 #### Resolve Initializer
 
