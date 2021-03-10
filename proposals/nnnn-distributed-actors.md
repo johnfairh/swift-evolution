@@ -408,6 +408,13 @@ distributed actor Greeter {
 }
 ```
 
+A local initializer:
+
+- cannot be implemented or overriden by users,
+  - Future work: We could lift this and allow implementing `init(transport:)` however we would have to "inject" the contract this initializer performs into the user-defined initializer then (i.e. calling to the transport and assigning the transport and address properties),
+- must be eventually be invoked by any initializer chain of a distributed actor,
+  - effectively this means that a designated initializer of a distributed actor without super-actors _must_ directly invoke `self.init(transport:)`, and a convenience initializers (as usual) must invoke eachother until they eventually call the designated initializer.
+
 Customization of this initializer itself is _not_ allowed, however it is permittable to define other initializers which accept additional parameters etc. They all must eventually invoke this transport initializer. It is special because of the binding of the actor instance and the transport. Thanks to this guarantee, the actor transport _always_ knows about all instances it was asked to manage. This is important as it allows us to trust that any `resolve(address:)` performed by the transport will correctly yield the appropriate actor reference, or throw.
 
 Some actor types may be designed with the assumption of a specific transport. It is possible to either check and `throw`/`fatalError` in such cases in an auxiliary initializer.
@@ -428,14 +435,12 @@ This means that other initializers of a distributed actor must be declared as fo
 distributed actor Worker { 
   let max: Int 
   
-  convenience init(max: Int, transport: ActorTransport) {
+  init(max: Int, transport: ActorTransport) {
     self.init(transport: transport)
     self.max = max
   }
 }
 ```
-
-Forgetting to mark the initializer as convenience results in the following error in the current implementation: `'distributed actor' initializer 'init(max:transport:)' must be 'convenience' initializer. Distributed actors have an implicitly synthesized designated 'init(transport:)' local initializer, which other initializers must delegate to.`
 
 Inside such initializer, the call to `self.init(transport: transport)` is enforced as well, because all local initializers must invoke it. This follows the same rules as designated and convenience initializers in classes.
 
@@ -447,7 +452,7 @@ Next we will discuss the "resolve" synthesized initializer.
 
 While we're discussing user-defined initializers though, it is worth calling out that it is illegal to invoke the resolve initializer on `self` - it is a very special initializer which results in potentially a "proxy" being allocated rather than a real object, and thus invoking it on `self` would make this process increadibly suspicious and potentially unsafe and thus is not allowed.
 
-#### Resolve Initializer
+#### Resolve `DistributedActor` Initializer
 
 A special "resolve initializer" is synthesized for distributed actors. It is not implementable manually, and invokes internal runtime functionality for allocating "proxy" actors which is not possible to achieve in any other way.
 
@@ -469,13 +474,17 @@ distributed actor Greeter {
 }
 ```
 
+A resolve initializer:
+
+- cannot be overriden or "implemented" by users
+- cannot be prevented from being synthesized, it is a core functionality of any distributed actor.
+- cannot be invoked by any other initializer, i.e. it is illegal to attempt to call it on `self` or `super`, this is because the resolve is special and means "return an already existing instance" or "allocate a proxy instance", in either cases, it does not make sense to initialize "this" instance, as we'll become the instance the transport instructs us to become during initialization (a proxy, or an existing one). 
+
 A resolve may throw when the transport decides that it cannot resolve the passed in address. A common example of a transport throwing would be if the address is for some protocol `unknown://` while the transport only can resolve `known://` actor addresses.
 
 The resolve initializer and related resolve function on the `ActorTransport` are _not_ `async` because they must be able to be invoked from decoding values, and the `Codable` infrastructure is not async-ready just yet. Also, for most use-cases they need not be asynchronous as the resolve is usually implemented well enough using local knowledge. In the future we might want to introduce an asynchronous variant of resolving actors which would simplify implementing transports as actors themselves, as well as enable more complicated resolve processes.
 
 A transport may decide to return a "dead reference" instead of throwing when resolution fails. This "dead reference" may sometimes be useful when debugging lifecycle races, and allows the logging of messages intended for the already-dead  actor, rather than failing resolution. This logging makes it easier to debug the specific timing with respect to other messages which were meant for, but never had a chance to be delivered to, their (dead) recipient. This pattern is entirely optional and most transports are expected to throw upon failing to resolve an address. The pattern has proven very useful in runtimes such as Akka which always employ this strategy when resolving actor addresses, so we wanted to acknowlage that it is possible to implement it using our transport proposal if necessary.
-
-Users cannot override or disable the synthesis of the resolve initializer (`init(resolve:using:)`), because that initializer is *very special* as it serves the creation of proxy instances, or returning existing instances. It is not allowed to invoke `super.init(resolve:using:)` manually.
 
 A resolve initializer may transparently create an instance if it decides it is the right thing to do. This is how concepts like "virtual actors" may be implemented: we never actively create an actor instance, but its creation and lifecycle is managed for us by some server-side component with which the transport communicates. Virtual actors and their specific semantics are outside of the scope of this proposal, but remain an important potential future direction of these APIs.
 
@@ -540,7 +549,7 @@ Some transports may choose to never throw if encountering an "unknown" address, 
 
 Distributed functions are a type of function which can be only defined inside a distributed actor (or an extension on such actor). 
 
-They must be marked explicitly for a number of reasons, the first and most important one being that that they are subject to additional type-checking rules (discussed in detail in [Distributed Actor Isolation](#distributed-actor-isolation)). The explicit marking of functions intended to be distributed also helps frameworks which may need to generate sources (to be enabled by the extensible SwiftPM proposal) to support their transports by generating `$distributed_` function bodies. IDEs also benefit from the ability to understand that a specific function is distributed, and may want to color them differently or otherwise indicate that such function may have higher latency and should be used with care.
+They must be marked explicitly for a number of reasons, the first and most important one being that that they are subject to additional type-checking rules (discussed in detail in [Distributed Actor Isolation](#distributed-actor-isolation)). The explicit marking of functions intended to be distributed also helps frameworks which may need to generate sources (to be enabled by the extensible SwiftPM proposal) to support their transports by generating `_distributed_...` function bodies. IDEs also benefit from the ability to understand that a specific function is distributed, and may want to color them differently or otherwise indicate that such function may have higher latency and should be used with care.
 
 A distributed actor function is declared as follows:
 
@@ -562,7 +571,7 @@ It is allowed to declare `Void` returning distributed functions. It is up to the
 
 Distributed functions invoked from outside of the actor itself are implicitly async and throwing. This follows the same rules as actor function invocations, and extends it to be throwing, because of the network operations involved to implement a distributed call, those calls when made from outside of the actor may fail due to network failures, and not just the distributed function throwing by itself.
 
-Distributed functions invocations on a remote actor references are turned by the compiler into invocations of special "hook" functions, which a transport framework is expected to fill in with the apropriate internals. For example, given a `greet(name:)` function, a special `$distributed_func(name:)` instance function on the same actor will be invoked by the runtime:
+Distributed functions invocations on a remote actor references are turned by the compiler into invocations of special "hook" functions, which a transport framework is expected to fill in with the apropriate internals. For example, given a `greet(name:)` function, a special `_distributed_func(name:)` instance function on the same actor will be invoked by the runtime:
 
 ```swift
 distributed actor Greeter { 
@@ -573,10 +582,25 @@ distributed actor Greeter {
 
 // ~~~ Source generated by actor transport frameworks ~~~
 extension Greeter { 
-  private func $distributed_greet(name: String) async throws -> String { 
-    // let messageRepresentationOfGreetName = ...
-    // ...
-    // ... specificActorTransport.send(messageRepresentationOfGreetName, to: actorAddress)
+  // TODO: how to spell this one, it must not access any other properties other than
+  // @_distributedActorIndependent ones.
+  
+  // OPTION 1: static function with address and transport passed...
+  static func _distributed_greet(
+      address: ActorAddress, transport: ActorTransport,
+      name: String
+  ) async throws -> String { 
+    let bytes = makeMessage(...)
+    (transport as! MyTransport).send(bytes, to: address)
+  }
+  
+  // OPTION 2: self function, with special type checking rules...
+  @distributedHandler // for greet(name:) 
+  func _distributed_greet(name: String) { 
+    // a @distributedHandler can ONLY access @_distributedActorIndependent properties,
+    // which specifically are: self.actorAddress and self.actorTransport.
+    let bytes = makeMessage(...)
+    (self.transport as! MyTransport).send(bytes, to: self.actorAddress)
   }
 }
 // ~~~ End of generated by actor transport frameworks ~~~
