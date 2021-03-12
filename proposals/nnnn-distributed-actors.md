@@ -81,7 +81,7 @@ distributed actor Greeter {
 
 The `distributed` contextual keyword enables a few additional type-checking requirements for such declarations (discussed in [Distributed Actor Isolation](#distributed-actor-isolation)), strengthening the actor-isolation rules such that they make sense in a distributed setting. By imposing more restrictions to such types and functions, it liberates distributed actors from their local affinity–allowing them to exist across process and network boundaries, fully embracing the message-passing nature of actors.
 
-Distributed actors also automatically conform to `Equatable`, `Hashable` and `Codable` for reasons we'll discuss in depth in [ActorAddress](#actor-address). If necessary, it is possible to provide your own conformance, disabling the synthesis feature. However in practice, there is almost no possible reasonalby useful other implementation fot those protocols other than the already synthesized one, which heavily rely on the special treatment of the address property which will be discussed in that section.
+Distributed actors also automatically conform to `Equatable`, `Hashable` and `Codable` for reasons we'll discuss in depth in [ActorAddress](#actor-address). If necessary, it is possible to provide your own conformance, disabling the synthesis feature. However in practice, there is almost no reasonably useful alternative implementation for those protocols other than the synthesized one. The synthesized conformance heavily relies on the special treatment of the address property, which will be discussed later in that section.
 
 Instead of implementing time and time again the same logic around serializing/deserializing payloads and sending/receiving over the network as many of us do today, distributed actors allow us to encapsulate all of the serialization and message passing logic in a transport and regain our focus on the functional logic.
 
@@ -128,7 +128,7 @@ distributed actor Player {
 distributed actor Item { ... }
 ```
 
-All of the serialization and networking logic will be automatically dispatched to from such call site, and we'll learn more in the upcoming sessions how exactly this is achieved. 
+All of the serialization and networking logic will be automatically dispatched to from such call site, and we'll learn more in the upcoming sections how exactly this is achieved. 
 
 We will explore all specific semantics and implementation details of a distributed actor in the upcoming sections. However let us first step back and learn what makes this all click, and how it has a proven track record in distributed systems programming.
 
@@ -185,7 +185,7 @@ Distributed functions can *only* be defined within
 - extensions of a distributed actor type (e.g. `extension Greeter`). 
   - The extension itself does not have to be–and can not be– marked as `distributed`.
 
-It is *not* allowed to mark stored or computed properties, subscripts, initializers od deinitializers as distributed.
+It is *not* allowed to mark stored or computed properties, subscripts, initializers or deinitializers as distributed.
 
 Distributed functions become *implicitly* **async** and **throwing** when invoked from *outside* of the declaring actor. 
 
@@ -223,7 +223,7 @@ let caplin = Caplin(transport: CoolTransport())
 //
 // the error message would be:
 // cannot invoke distributed actor-isolated non-distributed function '...' 
-//        on potentially  potentially remote distributed actor 'caplin'
+//        on potentially remote distributed actor 'caplin'
 
 
 _ = try await caplin.syncHello() // implicitly async throws
@@ -286,7 +286,7 @@ All while the actual functionality of the actor, and how we interact with it, re
 
 This is a very powerful technique, and allows us to program "heavy" actors which e.g. load up caches and other information when they start, and we need not ever concern ourselfes "only load caches if I'm the real actor" or similar patterns. Such caching patterns are tremendously useful in practice, and allow actors to become in-memory representations of real world entities, such as IoT devices, representations of players in a network game, or their own small hot-caches for an ongoing operation some user may be performing remotely. 
 
-A popular use case for this is a "hot" representation of e.g. a shopping cart, where we keep an actor in memory to represent the card as long as the user remains on the check-out page (or on the site / in the app), as the actor stores all operations the user performs, we need not go back and forth to the database all the time when refreshing the page, we can use the actor as a form of specialized hot cache. If the user goes away, the actor can automatically passivate and flush changes to some actual persistent storage etc.
+A popular use case for this is a "hot" representation of e.g. a shopping cart, where we keep an actor in memory to represent the cart as long as the user remains on the check-out page (or on the site / in the app). As the actor stores all operations the user performs, we need not go back and forth to the database all the time when refreshing the page, we can use the actor as a form of specialized hot cache. If the user goes away, the actor can automatically passivate and flush changes to some actual persistent storage, etc.
 
 ### Overview: Actor Transports
 
