@@ -3,8 +3,8 @@
 * Proposal: [SE-NNNN](NNNN-distributed-actors.md)
 * Authors: [Konrad 'ktoso' Malawski](https://github.com/ktoso), [Dario Rexin](https://github.com/drexin), [Doug Gregor](https://github.com/DougGregor), [Tomer Doron](https://github.com/tomerd)
 * Review Manager: TBD
-* Status: **Implementation in progress**
-* Implementation: [PR ####](https://github.com/ktoso/swift/tree/wip-distributed-actors-prime)
+* Status: **In progress**
+* Implementation: In progress on `main` branch, [Initial pull request ](https://github.com/apple/swift/pull/36302)
 
 ## Table of Contents
 
