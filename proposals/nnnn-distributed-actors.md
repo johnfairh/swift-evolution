@@ -200,15 +200,19 @@ Please note that if the target distributed function is throwing as well, the `Er
 Let us use an example to showcase the isolation rules in practice:
 
 ```swift
+// Caplin the Capybara
 distributed actor Caplin { 
+  // various functions to pet the capybara:
   
-  func local_syncHello() -> String { ... }
-  func local_asyncHello() async -> String { ... }
-  func local_asyncThrowsHello() async throws -> String { ... }
+  func local_syncPet() { ... }
+  func local_asyncPet() async { ... }
+  func local_throwsPet() throws { ... }
+  func local_asyncThrowsPet() async throws { ... }
   
-  distributed func syncHello() -> String { ... }
-  distributed func asyncHello() async -> String { ... }
-  distributed func asyncThrowsHello() async throws -> String { ... }
+  distributed func syncPet() { ... }
+  distributed func asyncPet() async { ... }
+  distributed func throwsPet() throws { ... }
+  distributed func asyncThrowsPet() async throws { ... }
 }
 ```
 
@@ -219,18 +223,20 @@ let caplin = Caplin(transport: CoolTransport())
 
 // outside of the distributed actor:
 
-// error: await caplin.local_syncHello()
-// error: await caplin.local_asyncHello()
-// error: await caplin.local_asyncThrowsHello()
+// error: await caplin.local_syncPet()
+// error: await caplin.local_asyncPet()
+// error: try await caplin.local_throwsPet()
+// error: try await caplin.local_asyncThrowsPet()
 //
 // the error message would be:
 // cannot invoke distributed actor-isolated non-distributed function '...' 
 //        on potentially remote distributed actor 'caplin'
 
 
-_ = try await caplin.syncHello() // implicitly async throws
-_ = try await caplin.asyncHello() // implicitly async throws
-_ = try await caplin.asyncThrowsHello() // implicitly async throws
+_ = try await caplin.syncPet() // implicitly async throws
+_ = try await caplin.asyncPet() // implicitly throws
+_ = try await caplin.throwsPet() // implicitly async
+_ = try await caplin.asyncThrowsPet() // no implicit effects, already was async throws
 ```
 
 Invoking the same functions from the inside of the actor, will allow us to invoke the non-distributed functions as well. Not only that, but the implicitly async/throwing effects of the distributed functions also no longer apply, since we "are the actor" so there is no networking going on between those invocations.
@@ -238,12 +244,15 @@ Invoking the same functions from the inside of the actor, will allow us to invok
 ```swift
 extension Caplin { 
   func test() async throws {
-    _ = caplin.syncHello() // no implicit effects
-    _ = await caplin.asyncHello() // no implicit effects
-    _ = try await caplin.asyncThrowsHello() // no implicit effects
+    _ = caplin.syncPet() // no implicit effects inside the actor
+    _ = await caplin.asyncPet() // no implicit effects inside the actor
+    _ = try caplin.throwsPet() // no implicit effects inside the actor
+    _ = try await caplin.asyncThrowsHello() // no implicit effects inside the actor
 
+    // non-distributed functions work as usual inside the actor:
     _ = caplin.local_syncHello() // ok
     _ = await caplin.local_asyncHello() // ok
+    _ = try caplin.local_throwsPet() // ok
     _ = try await caplin.local_asyncThrowsHello() // ok
   }
 }
@@ -1453,33 +1462,24 @@ This proposal does not address any of these patterns however it is possible for 
 **Pre-requisites**
 
 - [SE-0296: **async/await**](https://github.com/apple/swift-evolution/blob/main/proposals/0296-async-await.md) - asynchronous functions are used to express distributed functions,
-- [SE-NNNN: **Actors**](https://forums.swift.org/t/pitch-2-actors/44094) - are the basis of this proposal, as it refines them in terms of a distributed actor model by adding a few additional restrictions to the existing isolation rules already defined by this proposal,
+- [SE-0302: **Sendable** and @Sendable closures](https://github.com/apple/swift-evolution/blob/main/proposals/0302-concurrent-value-and-concurrent-closures.md) - distributed actors, same as local actors, always require their message components (return type, parameter types) to be `Sendable` and extend this mechanism to requiring `Codable`, or the customizable `DistributedSendable = Sendable & Codable`.
+- [SE-0306: **Actors**](https://github.com/apple/swift-evolution/blob/main/proposals/0306-actors.md) - are the basis of this proposal, as it refines them in terms of a distributed actor model by adding additional restrictions to the existing isolation rules already defined by the actor proposal,
 
 **Related**
 
 - [SE-NNNN: **Task Local Values**](https://github.com/apple/swift-evolution/pull/1245) - are accessible to transports, which use task local values to transparently handle request deadlines and implement distributed tracing systems (this may also apply to multi-process instrumentation),
 - [SE-0295: **Codable synthesis for enums with associated values**](https://github.com/apple/swift-evolution/blob/main/proposals/0295-codable-synthesis-for-enums-with-associated-values.md) - because distributed functions relying heavily on `Codable` types, and runtimes may want to express entire messages as enums, this proposal would be tremendously helpful to avoid developers having to drop down to manual Codable implementations.
 
-**Follow-ups**
-
-- **SwiftPM Extensible build-tools** – which will enable source-code generators, necessary to fill-in distributed function implementations by specific distributed actor transport frameworks.
+- [SE-0303: Package Manager **Extensible Build Tools**](https://github.com/apple/swift-evolution/blob/main/proposals/0303-swiftpm-extensible-build-tools.md) – which will enable source-code generators, necessary to fill-in distributed function implementations by specific distributed actor transport frameworks.
 
 **Related work**
 
-- [Swift Cluster Membership](https://www.github.com/apple/swift-cluster-membership) ([blog](https://swift.org/blog/swift-cluster-membership/)) – cluster membership protocols are both natural to express using distributed actors, as well as very useful to implement membership for distributed actor systems.
-- [Swift Distributed Tracing](https://github.com/apple/swift-distributed-tracing) – distributed actors are able to automatically and transparently participate in distributed tracing systems and instrumentation, this allows for a "profiler-like" performance debugging experience across entire fleets of servers,
+- [Swift **Cluster Membership**](https://www.github.com/apple/swift-cluster-membership) ([blog](https://swift.org/blog/swift-cluster-membership/)) – cluster membership protocols are both natural to express using distributed actors, as well as very useful to implement membership for distributed actor systems.
+- [Swift **Distributed Tracing**](https://github.com/apple/swift-distributed-tracing) – distributed actors are able to automatically and transparently participate in distributed tracing systems and instrumentation, this allows for a "profiler-like" performance debugging experience across entire fleets of servers,
 
 
 
 ## Alternatives Considered
-
-### Infer that "`distributed func`" automatically is `throws`
-
-Since distributed functions today are required to be throwing, one could ask why not make them throwing automatically?
-
-Firstly, we want to make it simple for readers of code to understand what they can and cannot do in such functions, and having the `throws` explicit is helpful for devleopers encountering a distributed function and actor the first time.
-
-One might argue that, similar to `async` being infered on actor functions _if called from the outside_ throws could be inferred the same way if called externally. However we do not want to weave too much magically infering things into those APIs, especially when in the future we might end up allowing non throwing declarations, if swift were to gain e.g. panics or soft faults which are more natural to model the "network failure" issues that are the reason to _require_ all distributed functions to be throwing.
 
 ### Discussion: Why Distributed Actors are better than "just" some RPC library?
 
