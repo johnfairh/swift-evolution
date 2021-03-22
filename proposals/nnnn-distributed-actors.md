@@ -1,4 +1,4 @@
-### Distributed Actors
+# Distributed Actors
 
 * Proposal: [SE-NNNN](NNNN-distributed-actors.md)
 * Authors: [Konrad 'ktoso' Malawski](https://github.com/ktoso), [Dario Rexin](https://github.com/drexin), [Doug Gregor](https://github.com/DougGregor), [Tomer Doron](https://github.com/tomerd)
@@ -8,7 +8,9 @@
 
 ## Table of Contents
 
-**TODO refresh it**
+[TOC]
+
+
 
 ## Introduction
 
@@ -518,12 +520,16 @@ Internally, it invokes the transport's `resolve` function, which determines if t
 protocol DistributedActor { 
   @derived 
   init(resolve address: ActorAddress, using transport: ActorTransport) throws { 
-  	// synthesized, invokes transport.resolve(address:as:)
+  	// simplified pseudo-code
+    try switch transport.resolve(address, as: Self.self) { 
+      case .resolved(let instance): self = instance
+      case .makeProxy:              self = <runtime call to create proxy instance>
+    }
   }
 }
 ```
 
-Implementing the resolve function by returning `.resolved(instance)` allows the transport to return known local actors it is aware of. Otherwise, if it intends to proxy messages to this actor through itself it should return `.proxy`, instructing the constructor to only construct a partial "proxy" instance using the address and transport. The transport may also chose to throw, in which case the constructor will rethrow the error, e.g. explaining that the passed in address is illegal or malformed.
+Implementing the resolve function by returning `.resolved(instance)` allows the transport to return known local actors it is aware of. Otherwise, if it intends to proxy messages to this actor through itself it should return `.makeProxy`, instructing the constructor to only construct a partial "proxy" instance using the address and transport. The transport may also chose to throw, in which case the constructor will rethrow the error, e.g. explaining that the passed in address is illegal or malformed.
 
 A proxy instance does not allocate storage for any of the actor defined properties, i.e. it is a simple proxy that only takes as much memory as the transport and actor address take. In other words, a proxy instance is like an empty shell, delegating all calls to the remote incarnation of the actor, all those delegations are performed by transforming calls on the actor into messages, which the transport delivers to the remote actor.
 
@@ -616,6 +622,71 @@ distributed func greet(who name: String) async -> String
 ```
 
 As with normal Swift code, it is required that the transport framework encodes the invocation of those functions in such way that they don't get "mixed up." To clarify, it is only the first parameter name which matters for the resolution, the second name should not matter, and be ignored by transport frameworks.
+
+### Distributed Actor Storage & Allocation
+
+Storage–meaning all stored properties it declares–of a distributed actor is treated specially.
+
+In the case of a distributed *remote* instance of a distributed actor, it is known that no memory needs to be allocated to actually store any of the actor's properties, because it does not actually exit "locally". To visualize this, let us have a look at a simplified in memory representation of a distributed local v.s distributed remote actor:
+
+```swift
+// distributed local
+// (same as DefaultActor)
+[heap object header | actor internals | $transport $address | ... actor (class) state ...]
+
+// distributed remote
+[heap object header | actor internals | $transport $address ]
+```
+
+As we can see, in the remote case, much less memory is necessary to be allocated to fully support the remote "proxy" instance. The decision to allocate a remote or local instance is performed _only_ in the resolve-initializer of a distributed actor. There is no other way to allocate a remote proxy other than attempting to resolve, and the associated transport deciding to allocate a proxy for given actor address. 
+
+This is tremendously useful and important, because distributed actors are meant to model hundreds of thousands (and more) instances of remote objects, e.g. IoT sensors, which are being managed by a single server, thus it is crucial that keeping references to those remote peers is as efficient as possible.
+
+At the same time, we don't want to have properties in the actor pointing at just some 
+
+Conceptually, one can imagine this being equivalent to the following transformation, where the actual actor instance is `$Impl` while the outer class becomes a "shell" containing it:
+
+```swift
+// pseudo-code similar to the SIL representation of a distributed actor
+distributed actor Worker { 
+  private actor $Impl { 
+    let name: String
+    var number: Int
+    func hello() {}
+    distributed func call() {} 
+  }
+  
+  let $transport: DistributedActorTransport
+  let $address: DistributedActorAddress
+  let $personality: DistributedActorPersonality<Self>
+  
+  var name: String { 
+    switch $personality {
+      case .local(let instance): return instance.name
+      case .remote:
+    }
+  }
+}
+```
+
+
+
+For completelness, the `DistributedActorPersonality` is defined as:
+
+```swift
+enum DistributedActorPersonality<Act: DistributedActor> { 
+  case local(instance: Act)
+  case remote
+}
+```
+
+As actors are reference types, the personality enum is guaranteed to have a known fixed size of a single pointer to the instance itself.
+
+Given such memory layout, a distributed *remote* actor is always statically known to have a static, fixed size, and does not occupy the same amount of memory as its remote counterpart. The local instance could store as much values as it wants, and the remote reference will always weight only the specific fixed amount of bytes. 
+
+> **TODO**: Does this very very complicate inheritance? Maybe we should ban it on distributed actors, there's a bunch of reasons to do so... including security actually as well.
+
+
 
 ### Distributed Actor Isolation
 
