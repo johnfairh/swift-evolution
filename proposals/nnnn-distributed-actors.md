@@ -311,7 +311,7 @@ Swift's Distributed Actors help because we can explicitly mark such network inte
 
 ### Distributed Actor Initializers
 
-#### Local `DistributedActor` initializer
+#### Local initializer
 
 All `distributed actors` have a synthesized required designated initializer that accepts an `ActorTransport`. 
 
@@ -335,21 +335,53 @@ distributed actor Greeter {
 }
 ```
 
-Currently overriding of this initializer itself is _not_ allowed. It is possible to define other initializers, however they must always delegate to this constructor, because of the important actor lifecycle tasks it performs.
+Currently overriding of this initializer itself is _not_ allowed. It is possible to define other initializers, however they must always delegate to this constructor, because of the important actor lifecycle tasks it performs:
 
-> **Note:** This restriction could be lifted in which case the necessary lifecycle hooks would be injected before and actor the user-defined initializer function body. The only reason we don't do this today is because it is hard to implement and make Definite Initialization happy about this. It is understood that it would be nice to allow implementing their own `init(transport:)`.
+```swift
+distributed actor Bad {
+  init() {} // forgot to call init(transport:)
+  // error: 'distributed actor' initializer 'init(y:transport:)' must (directly or indirectly) delegate to 'init(transport:)'
+  
+  init(transport: ActorTransport) {}
+  // Currently error: 'distributed actor' local-initializer 'init(transport:)' cannot be implemented explicitly
+}
+```
 
-Thanks to the guarantee that the `init(transport:)` will _always_ be called when creating a distributed actor instance, we are able to offer the actorTransport and actorAddress properties as nonisolated members of any distributed actor.
+```swift
+distributed actor OK1 {
+  let name: String
+  
+  init(name: String) { // ok
+    self.name = name
+    self.init(transport: HardcodedTransport.global) // ok, but not recommended
+  }
+  
+  init(name: String, transport: ActorTransport) {
+    self.name = name
+    self.init(transport: transport)
+  }
+}
 
-Some actor types may be designed with the assumption of a specific transport. It is possible to either check and `throw`/`fatalError` in such cases in an auxiliary initializer.
+distributed actor OK2 {
+  
+  init(y: Int, transport: ActorTransport) { // ok
+    self.init(transport: transport)
+  }
 
-In which case all instances of such actor will use the `BestTransport`. This is useful when a project uses only a single transport, and never uses multiple transports within the same project.
+  init(x: Int, y: Int, transport: ActorTransport) {
+    // ok, since we do delegate to init(transport) *eventually*
+    self.init(y: y, transport: transport)
+  }
+}
+```
 
-While we warn against abusing this pattern as it makes it impossible to e.g. test code in a distributed-yet-on-the-same-host setting, which can be very useful in writing tests for distributed algorithms. However we acknowlage that the simplification from not having to always pass the transport to all distributed initializers is a nice win in smaller and not-so-distributed projects, e.g. if a project only ever uses distributed actors to communicate with it's daemon co-process using XPC.
+> **Note:** We could potentially lift the restriction, and allow end-could be lifted in which case the necessary lifecycle hooks would be injected before and actor the user-defined initializer function body. The only reason we don't do this today is because it is hard to implement and make Definite Initialization happy about this. It is understood that it would be nice to allow implementing their own `init(transport:)`.
 
-#### Resolve Initializer
+Thanks to the guarantee that the `init(transport:)` will _always_ be called when creating a distributed actor instance and the only other method of distributed actor initialization also ensures those properties are initialized properly, we are able to offer the `actorTransport` and `actorAddress` properties as `nonisolated` members of any distributed actor. This is of important, because those properties enable us to implement certain crucial protocol requirements using nonisolated functions, as we'll discuss in [Distributed functions and protocol conformances](#distributed-functions-and-protocol-conformances).
 
-A special "resolve initializer" is synthesized for distributed actors. It is not implementable manually, and invokes internal runtime functionality for allocating "proxy" actors which is not possible to achieve in any other way.
+#### Resolve initializer
+
+So far, we have not seen a way to create a "remote" distributed actor reference. This is handled by a special "resolve initializer" is synthesized for distributed actors. It is not implementable manually, and invokes internal runtime functionality for allocating "proxy" actors which is not possible to achieve in any other way.
 
 A resolve initializer takes the shape of `init(resolve: ActorAddress, using: ActorTransport)`:
 
@@ -715,53 +747,50 @@ try await dal.generate() // ok!
 
 The semantics of the `makeName()` witness are the same as discussed in [SE-0313: Improved control over actor isolation: Protocol conformances](https://github.com/apple/swift-evolution/blob/main/proposals/0313-actor-isolation-control.md#protocol-conformances) - it must be nonisolated in order to be able to conform to the protocol requirement. As they are not distributed functions, the same rules apply as if it were a plain old normal actor. The only difference being, when one is allowed to invoke them cross-actor (only when using the `whenLocal(...)` escape hatch).
 
-#### Distributed Actor `nonisolated` members
+#### `nonisolated` members
 
 In order to be able to implement a few yet very useful protocols for distributed actor usage within the context of e.g. collections, we need to be able to implement functions which are "independent" of their enclosing distributed actor's nature.
 
 As we will discuss in detail in the following sections, distributed actors are for example `Equatable` and because because exists exactly _one_ correct way of implementhig this and a few other protocols on a distributed actor type.
 
-The `distributed(nonisolated)` modifier may only be applied to functions within distributed actors. The `distributed(nonisolated)` modifier implies `nonisolated` as well, which allows us implementing synchronous protocol requirements with witness functions annotated using this modifier. Refer to [SE-0313: Improved control over actor isolation](https://github.com/apple/swift-evolution/blob/main/proposals/0313-actor-isolation-control.md#protocol-conformances) for more details on actors and protocol conformances.
+The `nonisolated` serves the same purpose and mechanically works the same way as on normal actors - it effectively means that the implicit `self` parameter of any such function or computed property, is `nonisolated` which can be understood as the function being "outside" of the actor, and therefore no actor hop needs to be emitted to invoke such functions. This allows us to implement synchronous protocol requirements, such as Codable, Hashable and others. Refer to [SE-0313: Improved control over actor isolation](https://github.com/apple/swift-evolution/blob/main/proposals/0313-actor-isolation-control.md#protocol-conformances) for more details on actors and protocol conformances.
 
-The compiler may, and does, apply this annotation to two special properties of any distributed actor: `actorTransport` and `actorAddress`. This is because those properies are _always_ available on any distributed actor instance, regardless if it is a local distributed actor or reference to a remote actor. This is guaranteed and ensured by the compiler and runtime, and has a deeply rooted reason for being special: a remote distributed actor instance occupies _only_ enough memory to store the transport and address. This is not something that is possible to achieve or modify by normal users, and therefore these two properties have this special treatment.
-
-Using this modifier, we may implement protocol requirements using a 
+Specifically, the Equatable and Hashable implementations have only _one_ meaningfully correct implementation given any distributed actor, which is utilizing the actors address to check for equality or compute the hash code:
 
 ```swift
 protocol DistributedActor {
-  distributed(nonisolated) var actorAddress: ActorAddress { get }
+  nonisolated var actorAddress: ActorAddress { get }
   // ...
 }
 
-extension DistributedActor: Equatable  {
-  // FIXME: @_distributedActorIndependent or distributed(nonisolated)
+extension DistributedActor: Equatable {
   @inlinable
   public static func ==(lhs: Self, rhs: Self) -> Bool {
     lhs.actorAddress == rhs.actorAddress
   }
 }
+
+extension DistributedActor: Hashable { 
+  nonisolated public func hash(into hasher: inout Hasher) {
+    self.actorAddress.hash(into: &hasher)
+  }
+}
 ```
 
+While it is not possible to declare stored properties of distributed actors as `nonisolated`, the address and transport are implemented using special computed properties, which know where in memory those fields are stored for every distributed actor, even if it is a remote instance which does not otherwise allocate memory for any of its declared stored properties.
 
+Unlike local-only actors, distributed actors *cannot* declare stored properties as `nonisolated`, however nonisolated functions, computed properties and subscripts are all supported. As any nonisolated function though, they may not refer to any isolated state of the actor.
 
-While it *not* possible to declare "distributed actor nonisolated" properties by end-users, this special capability exists within the runtime for the purpose of exactly two properties that any distributed actor has: its address and transport.
+This would invite a model in the isolation checking, where we would allow–when dealing with a remote actor reference–access to properties which do not exist in memory. This is because a remote reference has allocated _exactly_ as much memory for the object as is necessary to store the address and transport fields, and no storage is allocated for any of the other stored properties of a remote reference, because the actor's state _does not exist_ locally, and we would not be able to invent any valid values for it. Therefore, it must not be possible to declare stored properties as nonisolated.
 
-The address and transport are _always_ provided to a distributed actor at it's creation time, including when a `resolve(address:using:)` is performed. The implementations of the address and transport protocols are also always `Sendable`. 
-
-In the case of a local actor these properties are effectively normal nonisolated properties. In the remote case however there is something special about them: the Swift runtime, when allocating a "remote actor proxy" object, that is internally used to implement such remote distributed actor, allocates _exactly_ as much memory for the object as is necessary to store the address and transport fields. No memory is allocated for any of the other properties of the distribute actor, because the actor's state _does not exist_ locally, and we would not be able to invent any valid values for it. Access to those properties will also never happen because of the distributed actor's state isolation mechanisms.
-
-Therefore, the only two properties on any distributed actor which are effectively not only non-isolated but also "distributed actor non-isolated" are the transport and address, because they are guaranteed to exist and have valid storage and values for any possible instantiation of such actor:
+This also means that it is possible to access the address and transport cross-actor, even though they are not distributed, and these accessess will not have any implicit effects applied to them:
 
 ```swift
 distributed actor Worker {}
 let worker: Worker = ... 
-worker.address   // : ActorAddress
-worker.transport // : ActorTransport
+worker.actorAddress   // ok
+worker.actorTransport // ok
 ```
-
-As discussed above, this capability is not available to any other properties. It is crucial to the effective integration of distributed actors in existing applications, because this is exactly what allows us to implement `Equatable` and anything else which may require access to an actor's address or transport (such as sending messages).
-
-It is legal, to declare `nonisolated` properties and function on distributed actors however, it means the same thing as it does in normal actors. It is not possible to gain access to such nonisolated property or function, because they are unless they are also `distributed`, however as we'll learn in ["Known to be local" distributed actors](TODO FIX THIS LINK), there are ways at runtime to get a distributed actor reference that is known-to-be local and therefore only the usual actor isolation rules apply to it.
 
 ### Actor Transports
 
