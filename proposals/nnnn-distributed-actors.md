@@ -18,9 +18,9 @@ Thanks to the recent introduction of [actors](https://github.com/apple/swift-evo
 
 Actors are a fantastic, foundational, building block for highly concurrent and scalable systems. Actors enable developers to focus on their problem domain, rather than having to micro manage every single function call with regard to it's thread-safety. State isolated by actors can only be interacted with "through" the enclosing actor, which ensures proper synchronization. This also means that such isolated state, may not actually be locally available, and as far as the caller of such function is concerned, there is not much difference "where" the computation takes place.
 
-This is one of the core strenghts of the [actor model](https://en.wikipedia.org/wiki/Actor_model): it applies equally well to concurrent as well as distributed systems. 
+This is one of the core strengths of the [actor model](https://en.wikipedia.org/wiki/Actor_model): it applies equally well to concurrent as well as distributed systems. 
 
-This proposal introduces *distributed actors*, which allow developers to take full advantage of the general actor model of computation. Distributed actors allow developers to scale their actor systems beyone single node/device systems, without having to learn many new concepts, but rather, naturally extending what they already know about actors to the distributed setting.
+This proposal introduces *distributed actors*, which allow developers to take full advantage of the general actor model of computation. Distributed actors allow developers to scale their actor systems beyond single node/device systems, without having to learn many new concepts, but rather, naturally extending what they already know about actors to the distributed setting.
 
 Distributed actors introduce the necessary type-system guard-rails, as well as runtime hooks along with an extensible transport mechanism. This proposal focuses on the language integration pieces, and explains where a transport library author would interact with such system to build a fully capable distributed actor runtime. The proposal does not go in depth about transport internals and design considerations, other than those that are required by the model.
 
@@ -65,7 +65,7 @@ distributed actor Player {
 }
 ```
 
-So far this behaves the same as a local-only actor, we cannot access `score` directly because the properties are "actor isolated". This is the same as with local-only actors where actor mutable state is isolated by the actor. Distributed actors however must also isolate immutable state, because the state itself may not even exist locally. Therefore, accessing `name` is also illegal on a distributed actor type, and would fail at compile time as shown below:
+So far this behaves the same as a local-only actor, we cannot access `score` directly because the properties are "actor isolated". This is the same as with local-only actors where mutable state is isolated by the actor. Distributed actors however must also isolate immutable state, because the state itself may not even exist locally. Therefore, accessing `name` is also illegal on a distributed actor type, and would fail at compile time as shown below:
 
 ```swift
 let player: Player
@@ -73,7 +73,7 @@ player.score // error: distributed actor-isolated property 'score' can only be r
 player.name // error: distributed actor-isolated property 'name' can only be referenced inside the distributed actor
 ```
 
-It is illegal to declare `nonisolated` _stored_ properties on distributed actors. The exact semantics of nonisolated will be discussed later on.
+It is illegal to declare `nonisolated` _stored_ properties on distributed actors. The exact semantics of `nonisolated` will be discussed later on.
 
 It is allowed to declare `static` properties and functions on distributed actors and–as they are completely outside of the distributed actor instance–they are legal to access from any context. They always refer to the local processes value of the static property or function. Usually these can be used for constants useful for the distributed actor itself, or users of it, e.g. like names or other identifiers.
 
@@ -137,7 +137,7 @@ func outside(worker: Worker) {
 }
 ```
 
-It is not allowed to declare `static` `distributed` functions, because a static functions are not isolated to the actor they are defined at, and as such can never be remote:
+It is not allowed to declare `static` `distributed` functions, because static functions are not isolated to the actor they are defined at, and as such can never be remote:
 
 ```swift
 distributed actor Worker { 
@@ -150,7 +150,7 @@ distributed actor Worker {
 
 Distributed actors and functions are largely a type-system and compiler feature, providing the necessary isolation and guardrails for such distributed actor to be correct and safe to use. In order for such actor to actually perform any remote communication, it is necessary to provide an implementation of the `ActorTransport` protocol.
 
-While distributed actors, on purpose, abstract away the "how" of their underlying messaging runtime, the actor transport is where the those implementation must be defined. A transport must be provided to every distributed actor instantiation. By default the `init(transport:)` is synthesized (and the `init()` default initializer is _not_ synthesized for distributed actors).
+While distributed actors, on purpose, abstract away the "how" of their underlying messaging runtime, the actor transport is where the implementation must be defined. A transport must be provided to every distributed actor instantiation. By default the `init(transport:)` is synthesized (and the `init()` default initializer is _not_ synthesized for distributed actors).
 
 ```swift
 distributed actor Worker {}
@@ -167,7 +167,7 @@ let worker = Worker(transport: transport)
 
 An actor transport can take advantage of any networking, cross process, or even in-memory approach it wants to, as long as it implements the protocol correctly. Transports may offer varying amounts of message send reliability, or other guarantees, and it is important that while we focus on the ability for actors to use any transport, it is not wrong for an application to be aware of what transports it will be used with, and e.g. attempt to limit message sizes to small messages e.g. because the underlying transport has some inherent limitations around those.
 
-End users of transports interact with them frequently, but not very deeply, as a transport must be passed to any instanciation of a distributed actor. Following that however, all other messaging interactions are done transparently by various hooks in the runtime. 
+End users of transports interact with them frequently, but not very deeply, as a transport must be passed to any instantiation of a distributed actor. Following that however, all other messaging interactions are done transparently by various hooks in the runtime. 
 
 A typical distributed actor creation therefore can look like this:
 
@@ -189,7 +189,7 @@ let greeter: Greeter = try Greeter.resolve(address: address, using: transport)
 let greeting: String = try await greeter.greet(name: "Alice")
 ```
 
-The returned greeter may be a remote or local instance, depending what the passed in address was pointing at. Resolving a local instance is how incoming messages are deliverd to spceific actors, the transport preforms a lookup using a freshly deserialized address, and if an actor is located, delivers messages (function invocations) to it.
+The returned greeter may be a remote or local instance, depending what the passed in address was pointing at. Resolving a local instance is how incoming messages are delivered to specific actors, the transport preforms a lookup using a freshly deserialized address, and if an actor is located, delivers messages (function invocations) to it.
 
 All distributed actors have the implicit nonisolated `actorTransport` and `actorAddress` property, which is initialized by the local initializer or resolve function automatically:
 
@@ -351,7 +351,7 @@ func <S: AnyActor & Scientist>researchAny(scientist: S) async throws -> Publicat
 }
 ```
 
-> **Note:** Indeed, the utility of this marker protocol is rather limited... however we feel it would be nice, and relatively cost-free to introduce this type as a _marker_ protocol because of the zero runtime overhead of it, and the added logical binding of actors in a comon type hierarchy. 
+> **Note:** Indeed, the utility of this marker protocol is rather limited... however we feel it would be nice, and relatively cost-free to introduce this type as a _marker_ protocol because of the zero runtime overhead of it, and the added logical binding of actors in a common type hierarchy. 
 >
 > The authors of the proposal could be convienced either way about this type though, and we welcome feedback from the community about it.
 
@@ -604,7 +604,7 @@ The type of errors thrown if the remote communication fail are up to the transpo
 
 #### `distributed func` internals
 
-> **Note:** It is a future direction to stop relying on end-users or source-generators having to fill in the `_remote_` function implementations. However we will only do so once we've gained practical experience with a few more transport implementations. This would happen before the feature is released from it's experimental mode however.
+> **Note:** It is a future direction to stop relying on end-users or source-generators having to fill in the `_remote_` function implementations. However we will only do so once we've gained practical experience with a few more transport implementations. This would happen before the feature is released from its experimental mode however.
 
 Developers implement distributed functions the same way as they would any other functions. This is a core gain from this model, as compared to external source generation schemes which force users to implement and provide so-called "stubs". Using the distributed actor model, the types we program with are the same types that can be used as proxies--there is no need for additional intermediate types.
 
@@ -1064,7 +1064,7 @@ Again, the exact shape and fields of an actor address are completely up to the `
 
 Another natural candidate for default conformance is the [`Identifiable` protocol](https://developer.apple.com/documentation/swift/identifiable) which is used to provide a _stable (logical) identity_, as this is exactly what a distributed actor's identity provides, we propose to conform to this protocol by default.
 
-The Identifiable protocol is useful for any type which has a *stable identity*, and in the case of a distributed actor there is a single correct way to conform to this protocol: by implementing the `id` requirement using the actor's address, therefore this conformance is provided as part of the standard library:
+The `Identifiable` protocol is useful for any type which has a *stable identity*, and in the case of a distributed actor there is a single correct way to conform to this protocol: by implementing the `id` requirement using the actor's address, therefore this conformance is provided as part of the standard library:
 
 ```swift
 extension DistributedActor: Identifiable { 
@@ -1682,7 +1682,7 @@ This global pattern discourages good patterns, about managing where and how acto
 
 Theoretically, distributed actors could be implemented as just a library, same as Akka does on the JVM. However this would be undermining both the distributed actors value proposition as well as the actual local-only actors provided by the language.
 
-First, a quick refreshed how Akka models (distributed) actors: There are two API varieties, the untyped "classic" APIs, and the current (stable since a few years) "typed" APIs. 
+First, a quick refresher how Akka models (distributed) actors: There are two API varieties, the untyped "classic" APIs, and the current (stable since a few years) "typed" APIs. 
 
 Adopting a style similar to Akka's ["classic" untyped API](https://doc.akka.io/docs/akka/current/actors.html#here-is-another-example-that-you-can-edit-and-run-in-the-browser-) is a non-started for Swift - it is unacceptable for such a thighly typed language to come out and say all messages are handled as `Any` with zero typesafety at all. It is important to remember that this is where Akka _started_ more than 10 years ago, however it is _not_ it's current API.
 
@@ -1770,4 +1770,3 @@ This proposal is ABI additive.
 ## Effect on API resilience
 
 **TODO:** ???
-
