@@ -309,9 +309,7 @@ distributed struct StructNope {} // error: 'distributed' modifier cannot be appl
 distributed enum EnumNope {} // error: 'distributed' modifier cannot be applied to this declaration
 ```
 
-A `distributed actor` and extensions on it are the only places where `distributed func` declarations are allowed. This is because in order to implement a distributed function, a transport and identity (actor address) are necessary.
-
-It is not possible to declare free `distributed` functions since it would be unclear what this would mean.
+A `distributed actor` type, extensions of it, and `DistributedActor` bound protocols are the only places where `distributed func` declarations are allowed. This is because in order to implement a distributed function, a transport and identity are necessary.
 
 It is possible for a distributed actor to have non-distributed functions as well. They are callable only from two contexts: the actor itself (by `self.nonDistributedFunction()`), and from within an `maybeRemoteActor.whenLocalActor { $0.nonDistributedFunction() }` which will be discussed in ["Known to be local" distributed actors](#known-to-be-local-distributed-actors), although the need for this should be relatively rare.
 
@@ -1312,7 +1310,9 @@ Implementations of resolve should generally not perform heavy operations and sho
 
 #### `distributed func` internals
 
-> **Note:** It is a future direction to stop relying on end-users or source-generators having to fill in the `_remote_` function implementations. However we will only do so once we've gained practical experience with a few more transport implementations. This would happen before the feature is released from its experimental mode however.
+> **Note:** It is a future direction to stop relying on end-users or source-generators having to fill in the `_remote_` function implementations.
+> However we will only do so once we've gained practical experience with a few more transport implementations. 
+> This would happen before the feature is released from its experimental mode however.
 
 Developers implement distributed functions the same way as they would any other functions. This is a core gain from this model, as compared to external source generation schemes which force users to implement and provide so-called "stubs". Using the distributed actor model, the types we program with are the same types that can be used as proxies--there is no need for additional intermediate types.
 
@@ -1329,56 +1329,94 @@ func greet(name: String) async -> String {
 
 Remote actors are very similar to this, but instead of enqueueing a `job` into their `serialExecutor`, they convert the call into a `message` (rather than `job`) and pass it to their `transport` (rather than `Executor`) for processing. In that sense, local and remote actors are very similar, each needs to turn an invocation into something the underlying runtime can handle, and then pass it to the appropriate runtime.
 
-The distributed actors design is purposefully detaching the implementation of such transport from the language, as we cannot and will not ship all kinds of different transport implementations as part of the language. Instead, what a distributed function does, is delegate to functions it assumes will exist at compile time, which are to be filled in by external code generation mechanisms (more on that in the coming sections).
+The distributed actors design is purposefully detaching the implementation of such transport from the language, as we cannot and will not ship all kinds of different transport implementations as part of the language. Instead, the language feature is implemented by delegating to `_remote_<function-name>` functions whenever a `<function-name>` function is invoked on a distributed actor. This is done by a synthesized thunk, which performs a simple check like this:
 
 ```swift
-// distributed actor pseudo-code (!)
-func greet(name: String) async throws -> String { 
-  if __isRemoteDistributedActor(self) {
-    await try self.$distributed_greet(self.transport, name: name)
+distributed func hi(name: String, surname: String) -> String { ... }
+
+/* ~~~~~~~ synthesized ~~~~~~ */
+func hi_distributedThunk(name: String, surname: String) async throws -> String {
+  if _isRemoteDistributedActor(self) { 
+    return try await self._remote_hi(name: name, surname: surname)
   } else {
-    // actual logic
+    return self.hi(name: name, surname: surname)
   }
 }
+/* === end of synthesized === */
 ```
 
-The function at compile time will generate where the `$distributed_[name]([params])` function is assumed to be provided by _someone_. In reality these functions will be provided by code generators which are able to turn the function calls (name + parameters) into `Codable` messages and dispatch such message onto the `transport` via `transport.send(id:message:expectingReply:)`.
+> **WORK IN PROGRESS NOTE:** Depending on how Kavon's idea on separate Decls for remote/local goes, we could instead just emit the remote call in the remote actor decl. We would avoid this if/else on calls then entirely at the cost of more emitted decls.
 
-An example of such code generated function would look like this:
+So, invocations on a distributed actor implicitly perform this check and dispatch either to the local, or `_remote` function. The `_remote_<function-name>` is also synthesized by default, and is a **dynamic function**, which means that it may be _dynamically replaced_ at build time. 
+
+The `_remote_<function-name>` is also synthesized at compile-time, however its implementation is going to exit with a fatal-error, unless it is replaced with a specific implementation. Its signature is the same as the target function it is representing. So in the case of the func `hi(name:surname:)` shown above, it would be effectively of the following shape:
 
 ```swift
-// ~~~ A "specific transport" would generate such code ~~~
+/* ~~~ synthesized ~~~ */
+dynamic func _remote_hi(name: String, surname: String) async throws -> String { 
+  fatalError("""
+             helpful message that one must provide a replacement for ths function, 
+             e.g. by installing a SwiftPM plugin of some transport (e.g. ...).
+             """)
+} 
+/* === end of synthesized === */
+```
+
+> This replacement also works even if we only have a binary dependency of the distributed actor providing library, but provide the _remote implementation on our project (compiling from source). This allows for re-use actors which are declared in libraries for which we do not have sources.
+
+In practice, this means that a project would install a SwiftPM plugin (see, [SE-0303](https://github.com/apple/swift-evolution/blob/main/proposals/0303-swiftpm-extensible-build-tools.md)) which source generates the tiny bit of glue code necessary for each of the distributed functions and their respective message representation. Because such source generation plugins run transparently to developers during the build process, it is not really noticeable during development time that source generation is used.
+
+The glue code that such plugin must generate might look somewhat as follows: 
+
+First, for outgoing messages, we need to create a "message" representing the distributed function. Transports may choose to do so as some form of large `enum`, containing all functions of a type as its cases, or by independent message structs representing each of the functions:
+
+```swift
+// EXAMPLE; One of the ways a source generator may synthesize a distributed func as a message
 extension Greeter { 
-  func $distributed_greet(
-    name: String, 
-    expectingReply: Reply.Type = Reply.self
-  ) throws async -> Reply {
-    // simplified implementation example
-    
-    // 1) serialize to message representation
-    let message = Greeter.$Message.greet(name: name)
-    let bytes = try self.transport.encoder(for: Greeter.$Message.self).encode(message)
-    
-    // 2) send the serialized bytes over the transport and await a response
-    return await try self.transport.send(bytes)
+  struct _HiMessage: _MyFrameworkMessage, Codable {
+    typealias Reply = String
+    let name: String
+    let surname: String
+  }
+  
+  // OR, a transport may represent messages as a large enum, like so:
+  
+  enum Messages { 
+    case hi(name: String, surname: String, reply: Reply<String>)
+    case unknown
   }
 }
 ```
 
-> Note: While it is up to a transport to decide the specific details of returning
+Second, for outgoing messages still, we need to replace the remote function. This is currently done using the direct dynamic replacement API, however as we mature this piece of the proposal this may either get its own attribute, or become unnecessary.
 
-As we can see this is very similar to the local actor case and has two steps for the sending part:
+```swift
+extension Greeter { 
+  @_dynamicReplacement(for: hi(name:surname:))
+  func _remote_hi(name: String, surname: String) async throws -> String {
+    let message = _HiMessage(name: name, surname: surname)
+    try await self._transport.send(message)
+  }
+}
+```
 
-- create representation of the invocation,
-  - in the local case: a raw task to be executed on the actor,
-  - in the distributed case: a `Codable` message representation to be sent over the wire to the recipient,
-- enqueue the message
-  - in the local case: on the actor's local mailbox / `queue`
-  - in the distributed case: onto the transport, which will send it over the wire
+Lastly, for incoming messages, a transport must somehow handle them by invoking the appropriate function. It is up to the transport to perform the decoding from the wire and obtain the discriminator by which to invoke the right function, but effectively it can boil down to switching over an enum or type, and invoking the function, e.g.:
 
-We are not set on a naming scheme for the `$distributed_` functions just yet, and would appreciate naming feedback here, although it should be something simple, since it is what source code generators of transport frameworks will have to generate, so not much type magic can be required from them. We suggest a simple name prefix or similar.
+```swift
+// EXAMPLE; assuming enum implementation of messages
+extension Greeter {
+  func _receive(message: _MyFrameworkMessageEnum) {
+    switch message {
+    case .hi(let name, let surname, let replyTo):
+      try await reply.send(self.hi(name: name, surname: surname))
+    }     
+  }
+} 
+```
 
-
+> **NOTE:** It is a goal to eventually get rid of this source generation step, however for the time being, and learning from experience and requirements of a number of specific transports we want to explore, the source generation approach is reasonable. 
+> 
+> Once we are confident in the semantics and language features required to get rid of the source generation step, we will be able to synthesize the appropriate `Envelope<Message>` and represent every `distributed func` as a well-defined codable `Message` type, which transports then would simply use their configured coders on.
 
 ## Future Directions
 
