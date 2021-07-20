@@ -34,11 +34,11 @@
          * [Distributed function parameters and return values](#distributed-function-parameters-and-return-values)
          * [Distributed functions are implicitly async throws when called cross-actor](#distributed-functions-are-implicitly-async-throws-when-called-cross-actor)
       * [Distributed Actor Isolation](#distributed-actor-isolation)
+         * [Only distributed or nonisolated members may be accessed on distributed actors](#only-distributed-or-nonisolated-members-may-be-accessed-on-distributed-actors)
          * [No permissive special case for accessing constant let properties](#no-permissive-special-case-for-accessing-constant-let-properties)
          * [Distributed functions and protocol conformances](#distributed-functions-and-protocol-conformances)
          * [nonisolated members](#nonisolated-members)
       * [Actor Transports](#actor-transports)
-         * [ActorTransport functions](#actortransport-functions)
          * [Transporting Errors](#transporting-errors)
       * [Actor Identity](#actor-identity)
          * [Distributed Actors are Identifiable](#distributed-actors-are-identifiable)
@@ -49,17 +49,18 @@
          * [Remote distributed actor instance allocation](#remote-distributed-actor-instance-allocation)
          * [distributed func internals](#distributed-func-internals)
    * [Future Directions](#future-directions)
-         * [Resolving DistributedActor bound protocols](#resolving-distributedactor-bound-protocols)
-         * [Synthesis of _remote and well-defined Envelope&lt;Message&gt; functions](#synthesis-of-_remote-and-well-defined-envelopemessage-functions)
-         * [Support for AsyncSequence](#support-for-asyncsequence)
-         * [Ability to hardcode actors to specific shared transport](#ability-to-hardcode-actors-to-specific-shared-transport)
-         * [Actor Supervision](#actor-supervision)
-      * [Related Work](#related-work)
-         * [Swift Distributed Tracing integration](#swift-distributed-tracing-integration)
-         * [Distributed Deadline propagation](#distributed-deadline-propagation)
-         * [Potential Transport Candidates](#potential-transport-candidates)
+      * [Resolving DistributedActor bound protocols](#resolving-distributedactor-bound-protocols)
+      * [Synthesis of _remote and well-defined Envelope&lt;Message&gt; functions](#synthesis-of-_remote-and-well-defined-envelopemessage-functions)
+      * [Support for AsyncSequence](#support-for-asyncsequence)
+      * [Ability to hardcode actors to specific shared transport](#ability-to-hardcode-actors-to-specific-shared-transport)
+      * [Actor Supervision](#actor-supervision)
+   * [Related Work](#related-work)
+      * [Swift Distributed Tracing integration](#swift-distributed-tracing-integration)
+      * [Distributed Deadline propagation](#distributed-deadline-propagation)
+      * [Potential Transport Candidates](#potential-transport-candidates)
    * [Related Proposals](#related-proposals)
    * [Alternatives Considered](#alternatives-considered)
+      * [TODO: all the internal representations of remote/local](#todo-all-the-internal-representations-of-remotelocal)
       * [Discussion: Why Distributed Actors are better than "just" some RPC library?](#discussion-why-distributed-actors-are-better-than-just-some-rpc-library)
       * [Special Actor spawning APIs](#special-actor-spawning-apis)
          * [Explicit spawn(transport) keyword-based API](#explicit-spawntransport-keyword-based-api)
@@ -70,7 +71,7 @@
    * [Effect on ABI stability](#effect-on-abi-stability)
    * [Effect on API resilience](#effect-on-api-resilience)
 
-<!-- Added by: ktoso, at: Tue Jul 20 19:31:18 JST 2021 -->
+<!-- Added by: ktoso, at: Wed Jul 21 00:16:35 JST 2021 -->
 
 <!--te-->
 
@@ -159,13 +160,11 @@ A distributed function is declared by prefixing the `func` keyword with the `dis
 
 ```swift
 distributed actor Worker { 
-  func actuallyDoTheWork(task: TaskID) {
-    // ... 
-  }
+  
   distributed func work() {
-    actuallyToTheWork(.first)
-    actuallyToTheWork(.second)
+     // ... 
   }
+
 }
 ```
 
@@ -182,7 +181,7 @@ struct SomeNotActorStruct {
 }
 ```
 
-Distributed functions, when called cross-actor, are *implicitly* asynchronous *and* throwing. This follows precendent from the actor proposal, in which synchronous functions inside actors, when called cross-actor, are implicitly asynchronous. The distributed nature of distributed functions however, also implies that any such call may fail, and therefore must be assumed to be throwing:
+Distributed functions can be declared synchronous, asynchronous, and/or throwing. When called cross-actor (i.e. "from the outside of the actor they are declared in"), they are *implicitly* asynchronous *and* throwing. This follows precendent from the actor proposal, in which synchronous functions inside actors, when called cross-actor, are implicitly asynchronous. The distributed nature of distributed functions however, also implies that any such call may fail, and therefore must be assumed to be throwing when called cross-actor:
 
 ```swift
 distributed actor Worker { 
@@ -215,9 +214,11 @@ distributed actor Worker {
 
 ### Distributed actor transports
 
-Distributed actors and functions are largely a type system and compiler feature, providing the necessary isolation and guardrails for such distributed actor to be correct and safe to use. In order for such an actor to actually perform any remote communication, it is necessary to provide an implementation of the `ActorTransport` protocol.
+Distributed actors and functions are largely a type system and compiler feature, providing the necessary isolation and guardrails for such distributed actor to be correct and safe to use. In order for such an actor to actually perform any remote communication, it is necessary to provide an actual runtime piece that will handle the networking such actor is intended to perform. This is done by providing any distributed actor with a specific instance of an `ActorTransport`.
 
-While distributed actors, on purpose, abstract away the "how" of their underlying messaging runtime, the actor transport is where the implementation must be defined. A transport must be provided to every distributed actor instantiation. By default the `init(transport:)` is synthesized (and the `init()` default initializer is _not_ synthesized for distributed actors).
+While distributed actors, on purpose, abstract away the "how" of their underlying messaging runtime, the actor transport is where the implementation must be defined. A transport must be provided to every distributed actor instantiation. 
+
+Unlike local-only actors, a distributed actor does not have an parameterless initializer, and must be initialized using the `init(transport:)` synthesized initializer instead. 
 
 ```swift
 distributed actor Worker {}
@@ -230,6 +231,18 @@ Worker()
 
 let transport = SomeActorTransport()
 let worker = Worker(transport: transport)
+```
+
+Alternatively, any user-defined initializer may be invoked, however any such initializer must delegate to the local initializer, and provide it some transport that the actor should be used with.
+
+```swift
+distributed actor Worker { 
+  let name: String
+  init(name: String, transport: ActorTransport) {
+    self.init(transport: transport)
+    self.name = name
+  }
+}
 ```
 
 An actor transport can take advantage of any networking, cross process, or even in-memory approach it wants to, as long as it implements the protocol correctly. Transports may offer varying amounts of message send reliability, or other guarantees, and it is important that while we focus on the ability for actors to use any transport, it is not wrong for an application to be aware of what transports it will be used with, and e.g. attempt to limit message sizes to small messages in case the underlying transport has some inherent limitations around those.
@@ -317,7 +330,7 @@ distributed enum EnumNope {} // error: 'distributed' modifier cannot be applied 
 
 A `distributed actor` type, extensions of it, and `DistributedActor` bound protocols are the only places where `distributed func` declarations are allowed. This is because in order to implement a distributed function, a transport and identity are necessary.
 
-It is possible for a distributed actor to have non-distributed functions as well. They are callable only from two contexts: the actor itself (by `self.nonDistributedFunction()`), and from within an `maybeRemoteActor.whenLocalActor { $0.nonDistributedFunction() }` which will be discussed in ["Known to be local" distributed actors](#known-to-be-local-distributed-actors), although the need for this should be relatively rare.
+It is possible for a distributed actor to have non-distributed functions as well. They are callable only from two contexts: the actor itself (by `self.nonDistributedFunction()`), and from within an `maybeRemoteActor.whenLocalActor { await $0.nonDistributedFunction() }` which will be discussed in ["Known to be local" distributed actors](#known-to-be-local-distributed-actors), although the need for this should be relatively rare.
 
 It is not allowed to define global actors which are distributed actors. If enough use-cases for this exist, we may loosen up this restriction, however generally this is not seen as a strong use-case, and it is possible to add this capability in a source and binary compatible way in the future if necessary.
 
@@ -390,11 +403,13 @@ func h(ma: MA) async {
 
 The core of the issue illustrated above stems from the incompatibility of the types semantics of "definitely local" vs. "maybe local, maybe remote". The semantics of a distributed actor to carry this "*maybe*" are crucial for building systems using distributed actors, and are not something we want to sacrifice (it is the foundation of location transparency), as such the two types are incompatible and converting between them seemingly with a sub-typing relationship would cause bugs and crashes at runtime.
 
-The proposal addresses this simply by acknowlaging that DistributedActor does _not_ inherit from Actor, and we believe this is in practice a very much workable model.
+This is not an issue though, rarely would one want to transparently convert "any (existential) Actor" to some other "any (existential DistributedActor". In reality, programs are developed in terms of specific protocols of concrete types.
+
+The proposal addresses this simply by acknowledging that `DistributedActor` does _not_ inherit from `Actor`, and we believe this is in practice a very much workable model.
 
 ##### Optional: The `AnyActor` marker protocol
 
-We could introduce a lightweight marker `@_marker protocol AnyActor` which is inherited by both `Actor` and `DistributedActor`. 
+We could introduce a lightweight `@_marker protocol AnyActor` which is inherited by both `Actor` and `DistributedActor`. 
 
 ```swift
 @_marker protocol AnyActor {} 
@@ -402,7 +417,7 @@ protocol Actor: AnyActor {}
 protocol DistributedActor: AnyActor {}
 ```
 
-The utility of this protocol is fairly limited in terms of extending it, because it has absolutely no protocol requirements. However, it is useful to express type requirements where we'd like to express the requirement that a type be implemented using any actor type, such as:
+Marker protocols cannot be inspected at runtime, and cannot be extended. As such, this protocol does not have much to offer in terms of practical reasons, i.e. we would not be able to write extensions of it. But even if we could, such extensions could not really be very useful, as such protocol does not really have any meaningful state or functions it could offer. However, it might be useful to express type requirements where we'd like to express the requirement that a type be implemented using any actor type, such as:
 
 ```swift
 protocol Scientist { 
@@ -416,27 +431,27 @@ func <S: AnyActor & Scientist>researchAny(scientist: S) async throws -> Publicat
 
 > **Note:** Indeed, the utility of this marker protocol is rather limited... however we feel it would be nice, and relatively cost-free to introduce this type as a _marker_ protocol because of the zero runtime overhead of it, and the added logical binding of actors in a common type hierarchy. 
 >
-> The authors of the proposal could be convienced either way about this type though, and we welcome feedback from the community about it.
+> The authors of the proposal could be convinced either way about this type though, and we welcome feedback from the community about it.
 
 #### Progressive Disclosure towards Distributed Actors
 
-The introduction of `distributed actor` is purely incremental, and does not imply any changes to the local programming model as defined by `actor`. However, once developers understand "share nothing" and "all communications are done through asynchronous functions (messages)", it is relatively simple to map the same understanding onto the distributed setting.
+The introduction of `distributed actor` is purely incremental, and does not imply any changes to the local programming model as defined by `actor`. However, once developers understand "share nothing" and "all communications are done through asynchronous functions (messages)", it is relatively simple to map the same understanding onto the distributed setting. Naturally, a distributed system carries many inherent complexities with it (e.g. message delivery reliability), but the general way of thinking about it in terms of actors remains the same, which we believe is a crucial and valuable aspect of the design and has been proven by other distributed actor implementations in other languages.
 
-None of the distributed systems aspects of distributed actors leaks through to local-only actors. Developers who do not wish to use distributed actors may simply ignore them.
+None of the distributed systems aspects of distributed actors leak through to local-only actors. Developers who do not wish to use distributed actors may simply ignore them.
 
-Developers who first encounter `distributed actor` in some API beyond their control can more easily learn about it if they have already seen actors in other parts of their programs, since the same mental model applies to distributed as well as local-only actors. The big difference is the inclusion of serialization and networking, but it can be quickly understood with the general "it will be slower than a local call" intuition. This is no different from having _some_ asynchronous functions performing "very heavy" work (like sending HTTP requests by calling `httpClient.post(<file upload>)`) while some other asynchronous functions are relatively fast--developers always need to reason about _what_ a function does in any case to understand performance characteristics.
+Developers who first encounter `distributed actor` in some API beyond their control can more easily learn about it if they have already seen actors in other parts of their programs, since the same mental model applies to distributed as well as local-only actors. The big difference is the inclusion of serialization and networking. A good first intuition is that such calls will be "slow" as they are going to be performed over the network -- this is no different from having _some_ asynchronous functions performing "very heavy" work (like sending HTTP requests by calling `httpClient.post(<file upload>)`) while some other asynchronous functions are relatively fast--developers always need to reason about _what_ a function does in any case to understand performance characteristics.
 
-Swift's Distributed Actors help because we can explicitly mark such network interaction heavy objects as `distributed actor`s, and therefore we know that distributed functions are going to use e.g. networking, so invoking them repeatedly in loops may not be the best idea. Xcode and other IDEs can make use of this static information to e.g. highlight distributed actor functions, helping developers understand where exactly networking costs are to be expected.
+Swift's distributed actors help because we can explicitly mark such network interaction heavy objects as `distributed actor`s, and therefore we know that distributed functions are going to use e.g. networking, so invoking them repeatedly in loops may not be the best idea. This is also the reason we are not interested in exposing distributed properties, because it would encourage distributed anti-patterns where the operations end up way too fine-grained and multi-call, rather than collapsing them into larger functions which perform a given request atomically. 
+
+Thanks to distributed actors and functions being expressed in the type system, it is also relatively simple for IDEs to e.g. highlight distributed actor functions, helping developers understand where exactly networking costs are to be expected. This is an improvement over today's world, where any function could technically perform network calls, and we are not able to easily notice it and may cause silly `N+1` operation mistakes by putting heavy network calls in the middle of a tight loop.
 
 ### Distributed Actor initialization
 
 #### Local initializers
 
-All `distributed actors` have a synthesized required designated initializer that accepts an `ActorTransport`. 
+All `distributed actors` have a synthesized designated initializer that accepts an `ActorTransport`: `init(transport:)`
 
 Every instantiation of a local distributed actor must call this initializer, which in turn performs lifecycle interactions with the transport, initializing the actor's `id` and `transport` properties.
-
-> **Note:** We could potentially discuss if rather we would want to store `ActorIdentity` which would keep a reference to the transport it was created from. The general idea of an address and transport though remain crucial to the entire design, regardless if we decide to store them slightly differently or not.
 
 This initializer contains synthesized lifecycle interactions with the passed in transport. A simplified outline of the synthesized initializer code is shown below:
 
@@ -444,17 +459,22 @@ This initializer contains synthesized lifecycle interactions with the passed in 
 distributed actor Greeter {
   /* ~~~ synthesized ~~~ */
   nonisolated var transport: ActorTransport { ... }
-  nonisolated var id identity: ActorIdentity { ... }
+  nonisolated var id identity: AnyActorIdentity { ... }
 
-  init(transport transport: ActorTransport) {
+  init(transport: ActorTransport) {
     self.transport = transport
-    self.address = transport.assignAddress(Self.self)
+    self.address = AnyActorIdentity(transport.assignAddress(Self.self))
+    // ... 
   }
   /* === end of synthesized === */
 }
 ```
 
-Currently, overriding of this initializer itself is _not_ allowed. It is possible to define other initializers, however they must always delegate to this constructor, because of the important actor lifecycle tasks it performs:
+Currently, overriding of the `init(transport:)` initializer itself is _not_ allowed. 
+
+> **NOTE:** It is understood that it would be nice to allow implementing their own `init(transport:)`, we would like to allow this but need to then figure out how the transport and interaction with it were to be initialized. Perhaps this isn't a big enough issue though.
+
+It is possible to define other initializers, however they must always delegate to this constructor, because of the important actor lifecycle tasks it performs:
 
 ```swift
 distributed actor Bad {
@@ -471,13 +491,13 @@ distributed actor OK1 {
   let name: String
   
   init(name: String) { // ok
-    self.name = name
     self.init(transport: HardcodedTransport.global) // ok, but not recommended
+    self.name = name
   }
   
   init(name: String, transport: ActorTransport) {
-    self.name = name
     self.init(transport: transport)
+    self.name = name
   }
 }
 
@@ -494,32 +514,33 @@ distributed actor OK2 {
 }
 ```
 
-> **NOTE:** It is understood that it would be nice to allow implementing their own `init(transport:)`, we would like to allow this but need to then figure out how the transport and interaction with it were to be initialized. Perhaps this isn't a big enough issue though.
 
 Thanks to the guarantee that the `init(transport:)` will _always_ be called when creating a distributed actor instance and the only other method of distributed actor initialization also ensures those properties are initialized properly, we are able to offer the `transport` and `id` properties as `nonisolated` members of any distributed actor. This is important, because those properties enable us to implement certain crucial protocol requirements using nonisolated functions, as we'll discuss in [Distributed functions and protocol conformances](#distributed-functions-and-protocol-conformances).
 
 #### Resolve function
 
-So far, we have not seen a way to create a "remote" distributed actor reference. This is handled by a special "resolve initializer" is synthesized for distributed actors. It is not manually implementable, and invokes internal runtime functionality for allocating "proxy" actors which is not possible to achieve in any other way.
+So far, we have not seen a way to create a _remote_ distributed actor reference. This is handled by a special `resolve(id:using:)` function is synthesized for distributed actors. It is not manually implementable, and invokes internal runtime functionality for allocating "proxy" actors which is not possible to achieve in any other way.
 
 The resolve function is declared as `func resolve<Act>(_ identity: Act.ID, as actorType: Act.Type) throws -> ActorResolved<Act>`, and in simplified terms can be imagined as being implemented as follows:
 
 ```swift
 distributed actor Greeter {  
   /* ~~~ synthesized ~~~ */
-  static func resolve(id identity: ActorIdentity, using transport: ActorTransport) throws -> Self {
+  static func resolve(_ identity: ActorIdentity, using transport: ActorTransport) throws -> Self {
     switch try await transport.resolve(identity, as: Self.self) {
     case .instance(let instance):
       return instance
     case .proxy:
-      return <<make proxy to 'identity' over 'transport'>>
+      return __runtimeMagicToAllocateProxyActor(...)
     }
   }
   /* === synthesized === */
 }
 ```
 
-A resolve may throw when the transport decides that it cannot resolve the passed in identity. A common example of a transport throwing in a `resolve` call would be if the `identity` is for some protocol `unknown://...` while the transport only can resolve `known://...` actor identities.
+The result of a resolve call can be an existing actor reference, e.g. if the resolved identity points to a local actor known to the transport the resolve was performed with. Or it may return a fresh remote actor instance, which effectively is just an empty shell of an actor storing the `identifier` and `transport` directing all calls as messages to the underlying transport for further processing and e.g. sending over the wire.
+
+A resolve may also throw if the transport decides that it cannot resolve the passed in identity. A common example of a transport throwing in a `resolve` call would be if the `identity` is for some protocol `unknown://...` while the transport only can resolve `known://...` actor identities.
 
 The resolve initializer and related resolve function on the `ActorTransport` are _not_ `async` because they must be able to be invoked from decoding values, and the `Codable` infrastructure is not async-ready just yet. Also, for most use-cases they need not be asynchronous as the resolve is usually implemented well enough using local knowledge. In the future we might want to introduce an asynchronous variant of resolving actors which would simplify implementing transports as actors themselves, as well as enable more complicated resolve processes.
 
@@ -531,7 +552,7 @@ A resolve initializer may transparently create an instance if it decides it is t
 
 #### `distributed func` declarations
 
-Distributed functions are a type of function which can be only defined inside a distributed actor (or an extension on such actor), and any attempt of defining one outside of a `distributed actor` (or an extension of such) is a compile-time error:
+Distributed functions are a type of function which can be only defined inside a distributed actor, and any attempt of defining one outside of a `distributed actor` (or an extension of such) is a compile-time error:
 
 ```swift
 distributed actor DA {
@@ -546,11 +567,15 @@ struct/class/enum/actor NotDistActor {
   distributed func nope() -> Int { ... } 
   // error: 'distributed' function can only be declared within 'distributed actor'
 }
+
+protocol Greeter: DistributedActor { 
+  distributed func henlo() -> String // ok!
+}
 ```
 
-Distributed functions must be marked explicitly for a number of reasons, the first and most important one being that that they are subject to additional type-checking rules (discussed in detail in [Distributed Functions](#distributed-functions) and [Distributed Actor Isolation](#distributed-actor-isolation)). IDEs also benefit from the ability to understand that a specific function is distributed, and may want to color them differently or otherwise indicate that such function may have higher latency and should be used with care.
+Distributed functions must be marked explicitly for a number of reasons, thought primarily thopse resolve around the fact that type-checking rules (see  [Distributed Actor Isolation](#distributed-actor-isolation)) and code synthesis (see [`distributed func` internals](#distributed-func-internals). IDEs also benefit from the ability to understand that a specific function is distributed, and may want to color them differently or otherwise indicate that such function may have higher latency and should be used with care.
 
-Similar to normal functions defined on actors, a distributed function has an implicitly `isolated` self parameter, meaning that they are able to refer to all internal state of an actor. Calling a distributed function on a local actor works effectively the same as calling any actor function on a local-only actor, if necessary an actor-hop will be emitted.
+Similar to normal functions defined on actors, a distributed function has an implicitly `isolated` self parameter, meaning that they are able to refer to all internal state of an actor. Calling a distributed function on a local actor works effectively the same as calling any actor function on a local-only actor, meaning that if necessary an actor-hop will be emitted.
 
 #### Distributed function parameters and return values
 
@@ -569,7 +594,7 @@ distributed actor Greeter {
 }
 ```
 
-If we were to try to return a non-Codable type, such as a `Greeting` struct we just created, we'll get a compiler error informing us that the Greeting type must be made to conform to `Codable` as well:
+If we were to try to return a non-`Codable` type, such as a `Greeting` struct we just created, we would get a compiler error informing us that the `Greeting` type must be made to conform to `Codable` as well:
 
 ```swift
 struct Greeting { ... }
@@ -591,7 +616,7 @@ The specific encoder/decoder choice is left up to the specific transport that th
 
 #### Distributed functions are implicitly `async throws` when called cross-actor
 
-Similarily to how any `actor` function is *implicitly* asynchronous if called from outside the actor (sometimes called a "cross-actor call"), distributed functions are implicitly asynchronous _and throwing_. This is because a distributed function represents a potentially remote call, and any remote call may fail due to various reasons not present in single-process programming. Connections can fail, transport layer timeouts and heartbeats may signal that the call should be considered failed etc. 
+Similarly to how any `actor` function is *implicitly* asynchronous if called from outside the actor (sometimes called a "cross-actor call"), distributed functions are implicitly asynchronous _and throwing_. This is because a distributed function represents a potentially remote call, and any remote call may fail due to various reasons not present in single-process programming. Connections can fail, transport layer timeouts and heartbeats may signal that the call should be considered failed etc. 
 
 This implicit throwing behavior is in addition to whether or not the function itself is declared as throwing. The below snippet shows the implicit effects applied to distributed functions when called from the outside:
 
@@ -618,15 +643,19 @@ func outside(greeter: Greeter) async throws {
 }
 ```
 
-The same implicit rules apply for `nonisolated` distributed functions, because they are effectively functions outside of the actors isolation domain.
-
 The type of errors thrown if the remote communication fail are up to the transport, however it is recommended that all errors thrown by the _transport_ rather than the actual remote function conform to the `ActorTransportError` protocol, which helps determine the reason of a call failing. We will discuss errors in more detail in their dedicated [Transporting Errors](#transporting-errors) section of this proposal.
 
-> **Potential future direction:** If Swift were to embrace a more let-it-crash approach, which thanks to actors and the full isolation story of them seems achievable, we could consider building into the language a notion of crashing actors and "failures" which are separate from "errors". This is not being considered or pitched in this proposal, but it's worth keeping in mind. Further discussion on this can be found here: [Cleanup callback for fatal Swift errors](https://forums.swift.org/t/stdlib-cleanup-callback-for-fatal-swift-errors/26977)
+> **Potential future direction:** If Swift were to embrace a more let-it-crash approach, which thanks to actors and the full isolation story of them seems achievable, we could consider building into the language a notion of crashing actors and "failures" which are separate from "errors". This is not being considered or pitched in this proposal, but it's worth keeping in mind. Further discussion on this can be found here: [Cleanup callback for fatal Swift errors](https://forums.swift.org/t/stdlib-cleanup-callback-for-fatal-swift-errors/26977).
 
 ### Distributed Actor Isolation
 
 Distributed actor isolation inherits all the isolation properties of local-only actors, removes a few one local-only special-case and adds two additional restrictions to the model. In the following sections we will discuss them one-by one to fully grasp why they are necessary.
+
+#### Only `distributed` or `nonisolated` members may be accessed on distributed actors
+
+As discussed in earlier sections, it is crucial that only `distributed func` declared members be accessible on any distributed actor instance.
+
+Thanks to this guarantee the compiler can check the necessary requirements on such declarations (see [`distributed func` declarations](#distributed-func-declarations)), and transports and runtime systems can tightly control the exact "exposed" surface of a distributed actor.
 
 #### No permissive special case for accessing constant `let` properties
 
@@ -652,7 +681,9 @@ distributed actor Greeter {
 Greeter(transport: ...).details // error: property 'details' is distributed actor-isolated
 ```
 
-Alternatively, it could be argued that the loosening of the actor model restrictions should be removed entirely.
+This restriction is restored in the distributed actor model, because accessing such property would mean a network call.
+
+We also argue that it is a non-goal, and would cause problematic anti-patterns in the real world, if such access to stored properties over network were somehow to be allowed. It is very much in the interest of clean distributed systems to expose as little and as coarse grained operations as possible, without the "easy way out" of exposing a remote actor's state remotely.
 
 #### Distributed functions and protocol conformances
 
@@ -687,7 +718,7 @@ func outsideAny<AnyDF: DistributedFunctionality>(df: AnyDF) async throws {
 
 As showcased in `outsideAny()` it is possible to invoke distributed functions on a generic or even existential type bound to a distributed actor protocol. The behavior of such invocations is as one might expect: if the actual passed actor is local, the actual function implementation is invoked, if it is remote a message is formed and sent to the remote distributed actor.
 
-It is also legal to declare non-distributed functions and other protocol requirements in such protocol, however as usual with any distributed actor such will _not_ be possible to be invoked on the distributed actor itself. They would be possible to call cross-actor when using the "known to be local" escape hatch which will be discussed later on.
+It is also legal to declare non-distributed functions and other protocol requirements in such protocol, however as usual with any distributed actor such will _not_ be possible to be invoked cross-actor, however they may serve as an implementation detail for other distributed functions. They would be possible to call cross-actor when using the "known to be local" escape hatch which will be discussed later on.
 
 ```  swift
 protocol DistributedAndNonisolatedLocalFunctionality: DistributedActor {
@@ -730,33 +761,32 @@ In order to be able to implement a few yet very useful protocols for distributed
 
 As we will discuss in detail in the following sections, distributed actors are for example `Equatable` by default, because there is exactly _one_ correct way of implementing this and a few other protocols on a distributed actor type.
 
-The `nonisolated` serves the same purpose and mechanically works the same way as on normal actors - it effectively means that the implicit `self` parameter of any such function or computed property, is `nonisolated` which can be understood as the function being "outside" of the actor, and therefore no actor hop needs to be emitted to invoke such functions. This allows us to implement synchronous protocol requirements, such as Codable, Hashable and others. Refer to [SE-0313: Improved control over actor isolation](https://github.com/apple/swift-evolution/blob/main/proposals/0313-actor-isolation-control.md#protocol-conformances) for more details on actors and protocol conformances.
+The `nonisolated` serves the same purpose and mechanically works the same way as on normal actors - it effectively means that the implicit `self` parameter of any such function or computed property, is `nonisolated` which can be understood as the function being "outside" of the actor, and therefore no actor hop needs to be emitted to invoke such functions. This allows us to implement synchronous protocol requirements, such as `Codable`, `Hashable` and others. Refer to [SE-0313: Improved control over actor isolation](https://github.com/apple/swift-evolution/blob/main/proposals/0313-actor-isolation-control.md#protocol-conformances) for more details on actors and protocol conformances.
 
-Specifically, the Equatable and Hashable implementations have only _one_ meaningfully correct implementation given any distributed actor, which is utilizing the actors address to check for equality or compute the hash code:
+Specifically, the `Equatable` and `Hashable` implementations have only _one_ meaningfully correct implementation given any distributed actor, which is utilizing the actors identity to check for equality or compute the hash code:
 
 ```swift
 protocol DistributedActor {
-  nonisolated var actorAddress: ActorAddress { get }
-  // ...
+  nonisolated var id: AnyActorIdentity { get }
+  // ... 
 }
 
 distributed actor Worker {} 
 
 extension Worker: Equatable {
-  @inlinable
   public static func ==(lhs: Self, rhs: Self) -> Bool {
-    lhs.actorAddress == rhs.actorAddress
+    lhs.id == rhs.id
   }
 }
 
 extension Worker: Hashable { 
   nonisolated public func hash(into hasher: inout Hasher) {
-    self.actorAddress.hash(into: &hasher)
+    self.id.hash(into: &hasher)
   }
 }
 ```
 
-While it is not possible to declare stored properties of distributed actors as `nonisolated`, the address and transport are implemented using special computed properties, which know where in memory those fields are stored for every distributed actor, even if it is a remote instance which does not otherwise allocate memory for any of its declared stored properties.
+While it is not possible to declare stored properties as `nonisolated`, the `id` and `transport` are implemented using special _computed_ properties, which know where in memory those fields are stored for every distributed actor, even if it is a remote instance which does not otherwise allocate memory for any of its declared stored properties.
 
 Unlike local-only actors, distributed actors *cannot* declare stored properties as `nonisolated`, however nonisolated functions, computed properties and subscripts are all supported. As any nonisolated function though, they may not refer to any isolated state of the actor.
 
@@ -775,9 +805,7 @@ worker.transport // ok
 
 Distributed actors are always associated with a specific transport that handles a specific instance.
 
-A transport a protocol that distributed runtime frameworks implement in order to take intercept and implement the messaging performed by a distributed actor.
-
-The protocol is defined as:
+A transport a protocol that distributed runtime frameworks implement in order to take intercept and implement the messaging performed by a distributed actor. The protocol is defined as:
 
 
 ```swift
@@ -808,8 +836,8 @@ public protocol ActorTransport: Sendable {
 
 A transport has two main responsibilities:
 
-- creating and resolving actor addresses which are used by the language runtime to construct distributed actor instances,
-- perform all message dispatch and handling on behalf of a distributed actor it manages, specifically:
+- **Lifecycle management:** creating and resolving actor addresses which are used by the language runtime to construct distributed actor instances,
+- **Messaging:** perform all message dispatch and handling on behalf of a distributed actor it manages, specifically:
   - for a remote distributed actor reference: 
     - be invoked by the framework's source generated `_remote_function` implementations with a "message" representation of the locally invoked function, serialize and dispatch it onto the network or other underlying transport mechanism. 
     - This turns local actor function invocations into messages put on the network.
@@ -817,101 +845,28 @@ A transport has two main responsibilities:
     - handle all incoming messages on the transport, decode and dispatch them to the apropriate local recipient instance. 
     - This turns incoming network messages into local actor invocations.
 
-The first category can be seen as "lifecycle management" of distributed actors, and is interlinked with the Swift runtime and synthesized code of a distributed actor. The compiler will synthesize code to call out to the transport to implement some of its most crucial functionality:
+The swift runtime synthesizes calls to the actor functions in specific locations of actor initializers, deinitializers and distributed functions, for example:
 
-- When a distributed actor is created using the local initializer (`init(transport:)`) the `transport.assignAddress(...)` function is invoked.
-- When the actor is deinitialized, the transport is invoked with `transport.resignAddress(...)` with the terminated actor's address. 
-- When creating a distributed actor using the resolve initializer (`resolve(id:using:)`) the Swift runtime invokes `transport.resolve(...)` asking the transport to decide if this address resolves as a local reference, or if a proxy actor should be allocated. Creating a proxy object is a Swift internal feature, and not possible to invoke in any way other than using a resolve initializer.
+- When a distributed actor is created using the local initializer (`init(transport:)`) the `transport.assignIdentity(...)` function is invoked.
+- When the actor is deinitialized, the transport is invoked with `transport.resignIdentity(...)` with the terminated actor's identity. 
+- When creating a distributed actor using the resolve function (`resolve(id:using:)`) the Swift runtime invokes `transport.resolve(_:as:)` asking the transport to decide if this address resolves as a local reference, or if a proxy actor should be allocated. 
+  - Creating a proxy object is a Swift internal feature, and not possible to invoke in any way other than using a resolve call.
 
-The second category is "actually sending/receiving the messages" which is highly dependent on the details of the underlying transport. We do not have to impose any API requirements on this piece of a transport actually. Since a distributed actor is intended to be started with a transport, and `_remote_<function>` functions are source generated by the same framework as the used transport, it can downcast the property to `MyTransport` and implement the message sending whichever way it wants. 
+The second category is "actually sending/receiving the messages" which is highly dependent on the details of the underlying transport. We do not have to impose any API requirements on this piece of a transport actually. Since a distributed actor is intended to be started with a transport, and `_remote_<function>` functions are source generated by the same framework as the used transport, it may have t downcast the property to `MyTransport` and implement the message sending whichever way it wants.
 
-This way of dealing with message sending allows frameworks to use their specific data-types, without having to copy back and forth between Swift standard types and whichever types they are using. It would be helpful if we had a shared "bytes" type in the language here, however in general a transport may not even directly operate on bytes, but rather accept a `Codable` representation of the invoked function (e.g. an enum that is `Codable`) and then internally, depending on configuration, pick the appropriate encoder/decoder to use for the specific message (e.g. encoding it using a binary coder rather than JSON etc). By keeping this representation fully opaque to Swift's actor runtime, we also allow plugging in completely different transports, and we could actually invoke gRPC or other endpoints which use completely different serialization formats (e.g. protobuf) rather than the `Codable` mechanism. We don't want to prevent such use-cases from existing, thus opt to keep the "send" functions out of the `ActorTransport` protocol requirements. This is also good, because it won't allow users to "randomly" write `self.transpot.send(randomMessage, to: id)` which would circumvent the type-safety experience of using distributed actors.
+> **NOTE:** We discuss in future work getting rid of this down-cast requirement, and the entire source generated piece of `_remote` functions entirely. However, today we are lacking the language features to do so.
 
-#### ActorTransport functions
-
-The transport's functions are closely tied to the lifecycle of a distributed actor. Specific transport calls are synthesized into every distributed actor declaration, e.g. interacting with it upon initialization and deinitialization.
-
-An actor transport can be implemented by conforming to the `ActorTransport` protocol:
-
- ```swift
- 
- public protocol ActorTransport: Sendable {
- 
-   // ==== ---------------------------------------------------------------------
-   // - MARK: Resolving actors by identity
-   /// Upon decoding of a `AnyActorIdentity` this function will be called
-   /// on the transport that is set un the Decoder's `userInfo` at decoding time.
-   /// This user info is to be set by the transport, as it receives messages and
-   /// attempts decoding them. This way, messages received on a specific transport
-   /// (which may be representing a connection, or general transport mechanism)
-   /// is able to utilize local knowledge and type information about what kind of
-   /// identity to attempt to decode.
-   func decodeIdentity(from decoder: Decoder) throws -> AnyActorIdentity
- 
-   /// Resolve a local or remote actor address to a real actor instance, or throw if unable to.
-   /// The returned value is either a local actor or proxy to a remote actor.
-   ///
-   /// Resolving an actor is called when a specific distributed actors `init(from:)`
-   /// decoding initializer is invoked. Once the actor's identity is deserialized
-   /// using the `decodeIdentity(from:)` call, it is fed into this function, which
-   /// is responsible for resolving the identity to a remote or local actor reference.
-   ///
-   /// If the resolve fails, meaning that it cannot locate a local actor managed for
-   /// this identity, managed by this transport, nor can a remote actor reference
-   /// be created for this identity on this transport, then this function must throw.
-   ///
-   /// If this function returns correctly, the returned actor reference is immediately
-   /// usable. It may not necessarily imply the strict *existence* of a remote actor
-   /// the identity was pointing towards, e.g. when a remote system allocates actors
-   /// lazily as they are first time messaged to, however this should not be a concern
-   /// of the sending side.
-   ///
-   /// Detecting liveness of such remote actors shall be offered / by transport libraries
-   /// by other means, such as "watching an actor for termination" or similar.
-   func resolve<Act>(_ identity: Act.ID, as actorType: Act.Type) throws -> ActorResolved<Act>
-       where Act: DistributedActor
- 
-   // ==== ---------------------------------------------------------------------
-   // - MARK: Actor Lifecycle
-   /// Create an `ActorIdentity` for the passed actor type.
-   ///
-   /// This function is invoked by an distributed actor during its initialization,
-   /// and the returned address value is stored along with it for the time of its
-   /// lifetime.
-   ///
-   /// The address MUST uniquely identify the actor, and allow resolving it.
-   /// E.g. if an actor is created under address `addr1` then immediately invoking
-   /// `transport.resolve(address: addr1, as: Greeter.self)` MUST return a reference
-   /// to the same actor.
-   // FIXME: make it Act.ID needs changes in AST gen
-   func assignIdentity<Act>(_ actorType: Act.Type) -> AnyActorIdentity
-       where Act: DistributedActor
- //  func assignIdentity<Act>(_ actorType: Act.Type) -> Act.ID
- //      where Act: DistributedActor
-   func actorReady<Act>(_ actor: Act) where Act: DistributedActor
- 
-   /// Called during actor deinit/destroy.
-   func resignIdentity(_ id: AnyActorIdentity)
- 
- }
- 
- public enum ActorResolved<Act: DistributedActor> {
-   case resolved(Act)
-   case makeProxy
- }
- ```
-
-
+This way of dealing with message sending allows frameworks to use their specific data-types, without having to copy back and forth between Swift standard types and whichever types they are using. It would be helpful if we had a shared "bytes" type in the language here, however in general a transport may not even directly operate on bytes, but rather accept a `Codable` representation of the invoked function (e.g. an enum that is `Codable`) and then internally, depending on configuration, pick the appropriate encoder/decoder to use for the specific message (e.g. encoding it using a binary coder rather than JSON etc). By keeping this representation fully opaque to Swift's actor runtime, we also allow plugging in completely different transports, and we could actually invoke gRPC or other endpoints which use completely different serialization formats (e.g. protobuf or JSON over websocket) rather than the `Codable` mechanism. We don't want to prevent such use-cases from existing, thus opt to keep the "send" functions out of the `ActorTransport` protocol requirements. This is also good, because it won't allow users to "randomly" write `self.transpot.send(randomMessage, to: id)` which would circumvent the type-safety experience of using distributed actors.
 
 #### Transporting `Error`s
 
-A transport _may_ attempt to transport errors back to the caller if it is able to encode/decode them, however this is _not encouraged_.
+A transport _may_ attempt to transport errors back to the caller if it is able to encode/decode them.
 
-Instead, logic errors should be modelled by returning `Result<User, InvalidPassword>` as it allows for typed handling of such errors as well as automatically enforcing that the returned error type is also `Codable` and thus possible to encode and transport back to the caller. This is a good idea also because it forces developers to consider if an error really should be encoded or not (perhaps it contains large amounts of data, and a different representation of the error would be better suited for the distributed function).
+Because the errors thrown by a `distributed func` are not typed, it is impossible to enforce at compile time that an error always be possible to encode using `Codable`. Transports may perform a best effort attempt to encode/decode errors, e.g. perhaps be encoding just the error type name rather than the entire error object and send it back to the caller where it would be thrown as an ActorTransportError subtype. Some transports may attempt encoding the entire Error object _if it was `Codable`_, however to do so securely, such types would also need to be registered in safe-lists for serialization etc. This isn't a topic we're exploring in depth in this proposal (because it is a transport implementation concern), but have explored and thought about already.
 
-Generally, it is encouraged to separate the "any failure" handling related to transport failures (such as timeouts or network errors), which are represented by the untyped `throws` of a distributed function call, from logical errors which (e.g. "invalid password").
+As usual with today's Swift, it is possible to express strongly typed errors by using `Result<User, InvalidPassword>` as it allows for typed handling of such errors as well as automatically enforcing that the returned error type is also `Codable` and thus possible to encode and transport back to the caller. This is a good idea also because it forces developers to consider if an error really should be encoded or not (perhaps it contains large amounts of data, and a different representation of the error would be better suited for the distributed function).
 
-The exact errors thrown by a distributed function depends on the underlying transport. Generally one should expect some form of `TheTransportError` to be thrown by a distributed function if transport errors occur--the exact semantics of those throws are intentionally left up to specific transports to document when and how to expect errors to be thrown.
+The exact errors thrown by a distributed function depends on the underlying transport. Generally one should expect some form of `struct BestTransportError: ActorTransportError { ... }` to be thrown by a distributed function if transport errors occur--the exact semantics of those throws are intentionally left up to specific transports to document when and how to expect errors to be thrown.
 
 To provide more tangible examples, why a transport may want to throw even if the called function does not, consider the following:
 
@@ -931,14 +886,13 @@ let failer: Failer = ...
 try await failer.letItCrash() 
 ```
 
-This allows transports to implement failure detection mechanisms which are tailored to the specific underlying transport, e.g. for clustered applications one could make use of Swift Cluster Membership's [SWIM Failure Detector](https://www.github.com/apple/swift-cluster-membership), while for IPC mechanisms such as XPC more process-aware implementations can be provided. The exact guarantees and semantics of detecting failure will of course differ between those transports, which is why the transport must define how it handles those situations, while the language feature of distributed actors _must not_ define it any more specifically than discussed in this section.
+This allows transports to implement failure detection mechanisms, which are tailored to the specific underlying transport, e.g. for clustered applications one could make use of Swift Cluster Membership's [SWIM Failure Detector](https://www.github.com/apple/swift-cluster-membership), while for IPC mechanisms such as XPC more process-aware implementations can be provided. The exact guarantees and semantics of detecting failure will of course differ between those transports, which is why the transport must define how it handles those situations, while the language feature of distributed actors _must not_ define it any more specifically than discussed in this section.
 
 ### Actor Identity
 
-A distributed actor's identity is defined by its `ActorIdentity`. 
+A distributed actor's identity is defined by its `id` property which stores an instance of the `ActorIdentity` type. 
 
-A distributed actor's identity is automatically assigned and managed during its initialization. Refer to the section on [Distributed Actor initialization
-](#distributed-actor-initialization) for an in depth discussion of the initialization process.
+A distributed actor's identity is automatically assigned and managed during its initialization. Refer to the section on [Distributed Actor initialization](#distributed-actor-initialization) for an in depth discussion of the initialization process.
 
 The specific implementation of the identity is left up to the transport that assigns it, and therefore may be as small as an `Int` or as complex as a full `URI` representing the actor's location in a cluster. As the identity is used to implement a number of protocol requirements, it must conform to a number of them as well, most notably it should be `Sendable`, `Codable`, and `Hashable`:
 
@@ -946,7 +900,9 @@ The specific implementation of the identity is left up to the transport that ass
 public protocol ActorIdentity: Sendable, Codable, Hashable {}
 ```
 
-The actual property of the `distributed actor` is a non-isolated computed property which is synthesized by the compiler and points at the identity assigned to the actor during the initialization (or resolve process). The property uses a type-erased struct to store the identity, because otherwise `Hashable`'s `Self` type requirements would prevent using `DistributedActor` bound protocols as existentials, which is a crucial use-case that we are going to implement in the near future:
+The actual `id` property of the distributed actor is a `nonisolated` computed property which is synthesized by the compiler and points at the identity assigned to the actor during the initialization (or resolve process). 
+
+The property uses a type-erased struct to store the identity, because otherwise `Hashable`'s `Self` type requirements would prevent using `DistributedActor` bound protocols as existentials, which is a crucial use-case that we are going to implement in the near future.
 
 ```swift
 protocol DistributedActor {
@@ -964,14 +920,24 @@ protocol DistributedActor {
 }
 ```
 
-Specific transports, depending on their use-cases and needs, may implement the identity protocol slightly differently. Comparing actor identities is sufficient to know if the pointed-at actors are the logically "the same" actor or different ones. An actor is inherently bound to a transport that it was created with, and as such, to the address assigned to it. This means that the same actor should be pointed at using the same address type, so cross type comparisons are not a big concern.
-
-In practice, implementations will implement an identity using a simple numeric identifier, or URI-like scheme. Implementing an identifier is simple, because a `struct` type gets all the necessary implementation pieces synthesized automatically, so it can be as simple as defining:
+Specific transports, depending on their use-cases and needs, may implement the identity protocol slightly differently. For example, they might implement the identity using a simple numeric identifier, or URI-like scheme. Implementing an identifier is simple, because a `struct` type gets all the necessary implementation pieces synthesized automatically, so it can be as simple as defining:
 
 ```swift
 // e.g. some "Net Actors" library may define the identity as:
 struct NetActorAddress: ActorIdentity { 
   let uri: String
+}
+```
+
+Comparing actor identities is sufficient to know if the pointed-at actors are the logically "the same" actor or different ones. An actor is inherently bound to a transport that it was created with, and as such, to the address assigned to it. This means that the same actor should be pointed at using the same address type, so cross type comparisons are not a big concern.
+
+We also offer the type-eraser `AnyActorIdentity` which is used to _store_ arbitrary actor identities, and is useful for e.g. using it as keys in a dictionary:
+
+```swift
+public struct AnyActorIdentity: ActorIdentity, @unchecked Sendable, CustomStringConvertible {
+  public init<ID>(_ identity: ID) where ID: ActorIdentity { ... }
+    // ... 
+  }
 }
 ```
 
@@ -981,7 +947,7 @@ Next, we will discuss a number of protocols that are implemented for any distrib
 
 An important protocol that any distributed actor conforms to automatically is the [`Identifiable` protocol](https://developer.apple.com/documentation/swift/identifiable) which is used to provide a _stable (logical) identity_, as this is exactly what a distributed actor's identity provides, we propose to conform to this protocol by default.
 
-The `Identifiable` protocol is useful for any type which has a *stable identity*, and in the case of a distributed actor there is a single correct way to conform to this protocol: by implementing the `id` requirement using the actor's address, therefore this conformance is provided as part of the standard library:
+The `Identifiable` protocol is useful for any type which has a *stable identity*, and in the case of a distributed actor there is a single correct way to conform to this protocol: by implementing the `id` requirement using the actor's identity:
 
 ```swift
 // @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
@@ -1002,21 +968,45 @@ extension DistributedActor: Identifiable {
 
 Note that the implementation of `id` is `nonisolated`. This means that it can be accessed _synchronously_, and even though that it is not a distributed function, it can always be accessed on any distributed actor. 
 
-The identity can be largely viewed as an opaque object from the perspective of the runtime, and users of distributed actors. However, for users it may provide useful debug information since, depending on the transport, it may include a full network address of the referred to actor, or some other logical name that can help identify the specific instance this reference is pointing at in the case of a remote actor reference.
+The identity can be largely viewed as an opaque object from the perspective of the runtime, and users of distributed actors. However, for users it may provide useful debug information since, depending on the transport, it may include a full network address of the referred to actor, or some other logical name that can help identify the specific instance this reference is pointing at in the case of a remote actor reference. As such, it can be useful to print the actor identity in the actor's default `description` implementation as well.
 
 #### Distributed Actors are `Equatable` and `Hashable`
 
 Concrete distributed actors types (i.e. not protocols) automatically get synthesized `Equatable` and `Hashable` conformances.
 
-Equality of actors _by actor identity_ is tremendously important, because it enables us to "remember" actors in collections, look them up, and compare if an incoming actor reference is one which we have not seen yet, or is a previously known one. It is an important piece of the location transparency focused design that we are proposing. For example:
+Equality of actors _by actor identity_ is tremendously important, because it enables us to "remember" actors in collections, look them up, and compare if an incoming actor reference is one which we have not seen yet, or is a previously known one. It is an important piece of the location transparency focused design that we are proposing. 
+
+For example, let us imagine a local, non-thread safe, class `ChatRoom` which aims to implement greetings to new members. If we implement each member of the chat room as a struct with some `id` (their nickname), property, we can eaisly implement a functionality to greet first time chatters slightly differently than returning ones:
+
+```swift
+struct Chatter: Hashable { 
+  var id: String = "@ktoso" 
+}
+
+final class ChatRoom {
+  var members: Set<Chatter> = []
+  
+  distributed func join(chatter: Chatter) async {
+    if members.insert(chatter).inserted {
+      return print("Welcome, \(chatter)!")
+    }
+  
+    return "Welcome back, \(chatter)!"
+  }
+}
+```
+
+Now, what if we wanted to implement a _distributed_ chat room? We would want our chatters to be active entities to which we can send chat messages - this is a natural fit for a distributed actor. The chatroom itself also may be located on some server, but we don't really care about _where exactly_ it is (remember _location transparency_?), so it also is a nice candidate for a distributed actor.
+
+Now, since the actor identities are unique, and assigned to each actor, we can simply use them to recognize new or returning chatters, like this:
 
 ```swift
 distributed actor Chatter {} 
 
-distributed actor ChatRoom { 
+distributed actor DistributedChatRoom { 
   var members: Set<Chatter> = []
   
-  distributed func join(chatter: Chatter) async throws -> String { 
+  distributed func join(chatter: Chatter) async { 
     if members.insert(chatter).inserted { 
       return "Welcome!"
     } else {
@@ -1026,11 +1016,11 @@ distributed actor ChatRoom {
 }
 ```
 
-While this example is pretty simple, the ability to identify actors using their address is tremendously important for distributed actors. 
+While this example is pretty simple, it showcases an incredibly common pattern to store and remember actors by their stable identity. This, and similar shapes of this pattern (which are lifecycle aware), are tremendously common in distributed actor system programming, and therefore we aim to make this simple, and work as expected by default.
 
-Unlike local-only actors, reference equality (`===`) is very likely incorrect! This is because we need to be able to implement transports which simply return a new proxy instance whenever they are asked to resolve a remote instance, rather than forevermore return the same exact instance for them which would lead to infinite (!) memory growth including forever keeping around instances of remote actors which we never know for sure if they are alive or not, or if they ever will be resolved again. Therefore `ActorAddress` quality is the only sane way to implement equality _and_ is a crucial element to keep transport implementations memory efficient.
+Unlike local-only actors, reference equality (`===`) of distributed actors is usually very misleading or actively harmful! This is because we need to be able to implement transports which simply return a new proxy instance whenever they are asked to resolve a remote instance, rather than forevermore return the same exact instance for them which would lead to infinite (!) memory growth including forever keeping around instances of remote actors which we never know for sure if they are alive or not, or if they ever will be resolved again. Therefore `ActorIdentity` equality is the only reasonable way to implement equality _and_ is a crucial element to keep transport implementations memory efficient.
 
-This is how the `==` and `hash` functions are synthesized by the compiler:
+For reference, this is how the `==` and `hash` functions are synthesized by the compiler:
 
 ```swift
 extension Chatter: Hashable {  
@@ -1044,51 +1034,22 @@ extension Chatter: Hashable {
 }
 ```
 
-If a distributed actor type provides either an `==(lhs:rhs:)` or `hash(into:)` implementation, the synthesis will be disabled.
-
 We, purposefully, do not implement these protocols directly on the `DistributedActor` protocol, because we want to allow such protocols be used as existentials in the near future. If we conformed the protocol itself to `Hashable` we would not be able to store other distributed actor protocols as existentials in variables, which is an essential use-case we want to support in order to allow for resolving such protocols, without knowing their implementation type at runtime. This use-case is discussed in depth in [Future Directions: Resolving `DistributedActor` bound protocols](#resolving-distributedactor-bound-protocols)).
 
 #### Distributed Actors are `Codable`
 
 Distributed actors are `Codable` and are represented as their _actor identity_ in their encoded form.
 
-In order to be true to the actor model's idea of freely shareable references, regardless of their location (known as the property of [*location transparency*](#location-transparency)), we need to be able to pass distributed actor references to other--potentially remote--distributed actors.
+In order to be true to the actor model's idea of freely shareable references, regardless of their location (see [*location transparency*](#location-transparency)), we need to be able to pass distributed actor references to other--potentially remote--distributed actors.
 
-This implies that distributed actors must be `Codable`. However, the way that encoding and decoding is to be implemented differs tremendously for actors and non-actors. Specifically, it does not make sense to serialize the actor's state - it is after all what is isolated from the outside world and from external access.
+This implies that distributed actors must be `Codable`. However, the way that encoding and decoding is to be implemented differs tremendously between _data_ and active entities such as _actors_. Specifically, it is not desirable to serialize the actor's state - it is after all what is isolated from the outside world and from external access.
 
-The `DistributedActor` protocol also conforms to `Codable`. As it does not make sense to encode/decode "the actor", per se, the actor's encoding is specialized to what it actually intends to express: encoding an address, that can be resolved on a remote node, such that the remote node can contact this actor. This is exactly what the `ActorAddress` is used for, and thankfully it is an immutable private property of each actor, so the synthesis of Codable of a distributed actor boils down to encoding its' address:
+The `DistributedActor` protocol also conforms to `Codable`. As it does not make sense to encode/decode "the actor", per se, the actor's encoding is specialized to what it actually intends to express: encoding an identity, that can be resolved on a remote node, such that the remote node can contact this actor. This is exactly what the `ActorIdentity` is used for, and thankfully it is an immutable property of each actor, so the synthesis of `Codable` of a distributed actor boils down to encoding its identity:
 
 ```swift
-distributed actor DA {
-  nonisolated var id identity: ActorIdentity { ... }
-  nonisolated var x: Int {}
-  nonisolated let xx: Int // ban
-  
-  let yy: Int // ok
-  
-  nonisolated func bar() {
-    self.x
-    self.xx // BAD
-    
-    self.yy // bad, because not distributed
-    // ask "is the BASE of this member access known to be isolated"
-  }
-  da.bar()
-}
-
-let da: DA 
-da.address // ok
-
-
-// no need for "assume local", just hop to the DA and then it is isolated 
-await da.whenLocal { (localDA: isolated DA) in 
-  localDA.xx // OK?
-}
-
 extension DistributedActor: Codable {
   /* ~~~ synthesized ~~~ */ 
-  nonisoalted 
-  @derived func encode(to encoder: Encoder) throws { 
+  nonisoalted func encode(to encoder: Encoder) throws { 
     var container = encoder.singleValueContainer()
     try container.encode(self.actorAddress)
   }
@@ -1096,9 +1057,9 @@ extension DistributedActor: Codable {
 }
 ```
 
-Decoding is slightly more involved, because it must be triggered from _within_ an existing transport. This makes sense, since it is the transport's internal logic which will receive the network bytes, form a message and then turn to decode it into a real message representation before it can deliver it to the recipient. 
+Decoding is slightly more involved, because it must be triggered from _within_ an existing transport. This makes sense, since it is the transport's internal logic which will receive the network bytes, form a message and then turn to decode it into a real message representation before it can deliver it to the decoded and resolved recipient. 
 
-In order for decoding of an Distributed Actor to work on every layer of such decoding process, a special `CodingUserInfoKey.transport` is used to store the actor transport in the Decoder's `userInfo` property, such that it may be accessed by any decoding step in a deep hierarchy of encoded values. If a distributed actor reference was sent as part of a message, this means that it's `init(from:)` will be invoked with the actor transport present. 
+In order for decoding of an Distributed Actor to work on every layer of such decoding process, a special `CodingUserInfoKey.distributedActorTransport` is used to store the actor transport in the Decoder's `userInfo` property, such that it may be accessed by any decoding step in a deep hierarchy of encoded values. If a distributed actor reference was sent as part of a message, this means that it's `init(from:)` will be invoked with the actor transport present. 
 
 The default synthesized decoding conformance can therefore automatically, without any additional user intervention, decode itself when being decoded from the context of any actor transport. The synthesized initializer looks roughly like this:
 
@@ -1111,23 +1072,20 @@ extension DistributedActor {
     }
     let container = try decoder.singleValueContainer()
 
-    let address = try container.decode(ActorAddress.self)
-    self = try Self(resolve: address, using: transport)
-    // FIXME: hitting the limitation
-    // 			  https://forums.swift.org/t/allow-self-x-in-class-convenience-initializers/15924
-    // need to use a workaround...
+    let identity = try container.decode(AnyActorIdentity.self)
+    self = try Self(resolve: identity, using: transport)
   }
   /* === synthesized === */
 }
 ```
 
-During decoding of such reference, the transport gets called again and shall attempt to `resolve` the actor's address. If it is a local actor known to the transport, it will return its reference. If it is a remote actor, it will return a proxy instance pointing at this address. If the address is illegal or unrecognized by the transport, this operation will throw and fail decoding the message.
+During decoding of such reference, the transport gets called again and shall attempt to `resolve` the actor's identity. If it is a local actor known to the transport, it will return its reference. If it is a remote actor, it will return a proxy instance pointing at this identity. If the identity is illegal or unrecognized by the transport, this operation will throw and fail decoding the message.
 
-To show an example of what this looks like in practice, we might implement an actor cluster transport, where the actor addresses are a form of URIs, uniquely identifying the actor instance, and as such encoding an actor turns it into `"[transport-name]://system@10.0.0.1:7337/Greeter#349785`, or using some other encoding scheme, depending on the transport used.
+To show an example of what this looks like in practice, we might implement an actor cluster transport, where the actor identities are a form of URIs, uniquely identifying the actor instance, and as such encoding an actor turns it into `"[transport-name]://system@10.0.0.1:7337/Greeter#349785`, or using some other encoding scheme.
 
-It is tremendously important to allow passing actor references around, across distributed boundaries, because unlike local-only actors, distributed actors can not rely on passing a closure to another actor to implement "call this later, please" style patterns. We are not, and do not want to, venture into the world of serializing and sending around closures. 
+It is tremendously important to allow passing actor references around, across distributed boundaries, because unlike local-only actors, distributed actors can not rely on passing a closure to another actor to implement "call me later" style patterns. This is also what enables the familiar "delegate" style patterns to be adopted and made use of using distributed actors!
 
-Instead, such patterns must be expressed by passing the `self` of a distributed actor (potentially as a `DistributedActor` bound protocol) to another distributed actor, such that it may invoke it whenever necessary. E.g. publish/subscribe patterns implemented using distributed patterns need this capability:
+Such "call me later"-patterns must be expressed by passing the `self` of a distributed actor (potentially as a `DistributedActor` bound protocol) to another distributed actor, such that it may invoke it whenever necessary. E.g. publish/subscribe patterns implemented using distributed patterns need this capability:
 
 ```swift
 distributed actor PubSubPublisher {
@@ -1151,7 +1109,7 @@ distributed actor PubSubPublisher {
 ```swift
 protocol SimpleSubscriber: DistributedActor {
   associatedtype Value: Codable
-  func onNext(_ value: Value) async throws
+  distributed func onNext(_ value: Value)
 }
 
 distributed actor PubSubSubscriber: Subscriber { 
@@ -1170,7 +1128,7 @@ distributed actor PubSubSubscriber: Subscriber {
 }
 ```
 
-The above snippet is showcases that with distributed actors, and codable DistributedActor types it is trivial to implement a simple pub-sub style publisher, and of course this ease of development extends to other distributed systems issues. The fundamental building blocks being a natural fit for distribution that "just click" are of tremendous value to the entire programming style with distributed actors. Of course a real implementation would be more sophisticated in its implementation, but it is a joy to look at how distributed actors make mundane and otherwise difficult distributed programming tasks simple and understandable.
+The above snippet showcases that with distributed actors it is pretty simple to implement a small _distributed_ pub-sub style publisher, and of course this ease of development extends to other distributed systems issues. The fundamental building blocks being a natural fit for distribution that "just click" are of tremendous value to the entire programming style with distributed actors. Of course a real implementation would be more sophisticated in its implementation, but it is a joy to look at how distributed actors make mundane and otherwise difficult distributed programming tasks simple and understandable.
 
 This allows us to pass actors as references across distributed boundaries:
 
@@ -1185,16 +1143,14 @@ distributed actor Greeter {
   var greeting: String = "Hello, there!"
   
   distributed func greet(person: Person) async throws {
-    person.greet("\(greeting)!
+    try await person.greet("\(greeting)!")
   }
 }
 ```
 
-The `ActorTransport` will be explained in depth in the detailed design sections, in general though the transport is to be considered an actor local value, which is not intended to be shared with other actors (i.e. unmovable). While the `self.transport.address` is possible to be shared with other actors, or even stored by them. It is a common pattern to store a set of known actors or addresses, in order to maintain a "watched" set of actors, which we can use to check incoming addresses against--is this message from a "new" actor, or one which I already have seen and stored in my "watched" set? These kinds of situations come up frequently in distributed system programming, and it is useful to be able to store addresses, with detachment to any actual reference to the real remote actor.
-
 ### "Known to be local" distributed actors
 
-Usually programming with distributed actors means assuming that an actor may be remote, and thus only `Codable` parameters/return types may be used with it. This is a sound and resilient model, however it sometimes becomes a frustrating limitation when an actor is "known to be local".
+Usually programming with distributed actors means assuming that an actor may be remote, and thus only `Codable` parameters/return types may be used with it. This is a sound and resilient model, however it sometimes becomes a frustrating limitation when an actor is "_known to be local_".
 
 This situation sometimes occurs when developing a form of manager actor which always has a single local instance per cluster node, but also is reachable by other nodes as a distributed actor. Since the actor is defined as distributed, we can only send messages which can be encoded to it, however sometimes such APIs have a few specialized local functions which make sense locally, but are never actually sent remotely. We do want to have these local-only messages to be handled by exactly the same actor as the remote messages, to avoid race conditions and accidental complexity from splitting it up into multiple actors.
 
@@ -1221,13 +1177,13 @@ We could offer a function to inspect and perform actions when the actor referenc
 extension DistributedActor { 
   @discardableResult
   nonisolated func whenLocal(
-    _ body: (actor Self) async throws -> T
-  ) (re)async rethrows -> T?
+    _ body: (isolated Self) async throws -> T
+  ) async rethrows -> T?
   
   nonisolated func whenLocal(
-    _ body: (actor Self) async throws -> T,
+    _ body: (isolated Self) async throws -> T,
     else whenRemote (Self) async throws -> T
-  ) (re)async rethrows -> T
+  ) async rethrows -> T
 }
 ```
 
@@ -1238,23 +1194,18 @@ distributed actor Greeter { func tell(_ message: String) { print(message) } }
 let greeter: Greeter = Greeter(transport: someTransport)
 let greeter2: Greeter = try Greeter(resolve: address, transport: someTransport)
 
-greeter.whenLocal { greeterWasLocal in 
+await greeter.whenLocal { greeterWasLocal in 
   greeterWasLocal.tell("It is local, after all!")
 }
 
-let location = greeter.whenLocal { _ in
+let location = await greeter.whenLocal { _ in
   "was local"
 } else { 
   "was remote, after all!"
 }
-
-assert(greeter == greeter2)
-assert(greeter === greeter2)
 ```
 
-This allows us to keep using the actor as isolation and "linearization" island, keep the distributed protocol implementations simple and not suffer from accidental complexity.
-
-This API should be seen as somewhat of a "backdoor", and APIs should not abuse it without need, however we acknowlage these situations happen in the real world, and would like to offer a clean solution. 
+This allows us to keep using the actor as isolation and "linearization" island, keep the distributed protocol implementations simple and not suffer from accidental complexity of splitting "local" "and local but also remote" pieces into separate actors.
 
 > For comparison, when this situation happens with other runtimes such as Akka the way around it is to throw exceptions when "not intended for remoting" messages are sent. It is possible to determine if an actor is local or remote in such runtimes, and it is used in some low-level orchestration and internal load balancing implementations, e.g. selecting 1/2 of local actors, and moving balancing them off to another node in the cluster etc.
 
@@ -1431,7 +1382,7 @@ extension Greeter {
 
 ## Future Directions
 
-#### Resolving DistributedActor bound protocols
+### Resolving DistributedActor bound protocols
 
 In some situations it may be undesirable or impossible to share the implementation of a distributed actor (the `distributed actor` definition) between "server" and "client". 
 
@@ -1465,7 +1416,7 @@ In other words, thanks to Swift's expressive protocols and isolation-checking ru
 
 > TODO: This is not implemented yet, and a bit more tricky however unlocks amazing use cases for when client/server are not the same team or organization.
 
-#### Synthesis of `_remote` and well-defined `Envelope<Message>` functions
+### Synthesis of `_remote` and well-defined `Envelope<Message>` functions
 
 Currently the proposal relies on "someone", be it a SwiftPM plugin performing source code generation, or a developer implementing specific `_remote_` function counterparts for each distributed function for a transport to receive apropriate message representations of each function invocation. 
 
@@ -1501,7 +1452,7 @@ The difficulty in this is mostly in the fact that we would be committing forever
 
 This must be thought though with consideration for numerous transports, and only once we're confident the strategy serves all transports we're interested will we be able to commit to a synthesis strategy here. Until then, we want to explore and learn about the various transport specific complications as we implement them using source generators and/or hand implemented `_remote_` functions.
 
-#### Support for `AsyncSequence`
+### Support for `AsyncSequence`
 
 This isn't really something that the language will need much more support for, as it is mostly handled in the `ActorTransport` and serialization layers, however it is worth pointing out here.
 
@@ -1509,7 +1460,7 @@ It is possible to implement (and we have done so in [other runtimes](https://doc
 
 This would manifest in returning / accepting values conforming to the AsyncSequence or some more specific marker protocol. Distributed actors can then be used as coordinators and "sources" e.g. of metrics or log-lines across multiple nodes -- a pattern we have seen successfully applied in other runtimes in the past.
 
-#### Ability to hardcode actors to specific shared transport
+### Ability to hardcode actors to specific shared transport
 
 In this potential extension we would allow either requiring a specific type of transport be used by adopting distributed actors, or outright provide a shared transport instance for certain distributed actors.
 
@@ -1549,7 +1500,7 @@ distributed actor SpecificDaemon: SpecificActor {
 }
 ```
 
-#### Actor Supervision
+### Actor Supervision
 
 Actor supervision is a powerful and crucial technique for distributed actor systems. It is a pattern well-known from other runtimes such as Erlang and Akka, where it is referred to "linking" or "watching" respectively.
 
@@ -1579,13 +1530,9 @@ distributed actor Observer {
 }
 ```
 
+## Related Work
 
-
-
-
-### Related Work
-
-#### Swift Distributed Tracing integration
+### Swift Distributed Tracing integration
 
 > This future direction does *not* impact the compiler pieces of the proposal, and is implementable completely in `ActorTransport` implementations, however we want to call it out nevertheless, because the shape of the proposal and task-local values have been designed to support this long-term use case in mind.
 
@@ -1631,7 +1578,7 @@ Such distributed dinner cooking can then be visualized as:
 
 Specific tracing systems may offer actual fancy nice UIs to visualize this rather than ASCII art.
 
-#### Distributed `Deadline` propagation
+### Distributed `Deadline` propagation
 
 The concurrency proposals initially also included the concept of deadlines, which co-operate with task cancellation in the task runtime.
 
@@ -1670,7 +1617,7 @@ extension AppleStore {
 }
 ```
 
-#### Potential Transport Candidates
+### Potential Transport Candidates
 
 While this proposal intentionally does not introduce any specific transport, the obvious reason for introducing this feature is implementing specific actor transports. This proposal would feel incomplete if we would not share our general thoughts about which transports would make sense to be implemented over this mechanism, even if we cannot at this point commit to specifics about their implementations.
 
@@ -1694,9 +1641,6 @@ It would be very natural, and has been considered and ensured that it will be po
 
 - [SE-0311: **Task Local Values**](https://github.com/apple/swift-evolution/blob/main/proposals/0311-task-locals.md) - are accessible to transports, which use task local values to transparently handle request deadlines and implement distributed tracing systems (this may also apply to multi-process Instruments instrumentations),
 - [SE-0295: **Codable synthesis for enums with associated values**](https://github.com/apple/swift-evolution/blob/main/proposals/0295-codable-synthesis-for-enums-with-associated-values.md) - because distributed functions relying heavily on `Codable` types, and runtimes may want to express entire messages as enums, this proposal would be tremendously helpful to avoid developers having from ever dropping down to manual Codable implementations.
-
-**Follow-ups**
-
 - [SE-0303: **SwiftPM Extensible build-tools**](https://github.com/apple/swift-evolution/blob/main/proposals/0303-swiftpm-extensible-build-tools.md) – which will enable source-code generators, necessary to fill-in distributed function implementations by specific distributed actor transport frameworks.
 
 **Related work**
@@ -1704,13 +1648,15 @@ It would be very natural, and has been considered and ensured that it will be po
 - [Swift Cluster Membership](https://www.github.com/apple/swift-cluster-membership) ([blog](https://swift.org/blog/swift-cluster-membership/)) – cluster membership protocols are both natural to express using distributed actors, as well as very useful to implement membership for distributed actor systems.
 - [Swift Distributed Tracing](https://github.com/apple/swift-distributed-tracing) – distributed actors are able to automatically and transparently participate in distributed tracing systems and instrumentation, this allows for a "profiler-like" performance debugging experience across entire fleets of servers,
 
-
-
 ## Alternatives Considered
+
+### TODO: all the internal representations of remote/local
+
+TODO: there was tens of iterations of this, we should explain a few so they don't come up again as they at first seem viable but break down later on.
 
 ### Discussion: Why Distributed Actors are better than "just" some RPC library?
 
-While this may be a highly subjective and sensitive topic, we want to tackle the question up-front, so why are distributed actors better than ""just" some RPC library?
+While this may be a highly subjective and sensitive topic, we want to tackle the question up-front, so why are distributed actors better than "just" some RPC library?
 
 The answer lies in the language integration and the mental model developers can work with when working with distributed actors. Swift already embraces actors for its local concurrency programming, and they will be omni-present and become a familiar and useful tool for developers. It is also important to notice that any aync function may be technically performing work over network, and it is up to developers to manage such calls in order to not overwhelm the network etc. With distributed actors, such calls are more _visible_ because IDEs have the necessary information to e.g. underline or otherwise hightlight that a function is likely to hit the network and one may need to consider it's latency more, than if it was just a local call. IDEs and linters can even use this statically available information to write hints such as "hey, you're doing this distributed actor call in a tight loop - are you sure you want to do that?"
 
@@ -1758,11 +1704,11 @@ This global pattern discourages good patterns, about managing where and how acto
 
 #### Directly adopt Akka-style Actors References `ActorRef<Message>`
 
-Theoretically, distributed actors could be implemented as just a library, same as Akka does on the JVM. However this would be undermining both the distributed actors value proposition as well as the actual local-only actors provided by the language.
+Theoretically, distributed actors could be implemented as just a library, same as Akka does on the JVM. However, this would be undermining both the distributed actors value proposition as well as the actual local-only actors provided by the language.
 
 First, a quick refresher how Akka models (distributed) actors: There are two API varieties, the untyped "classic" APIs, and the current (stable since a few years) "typed" APIs. 
 
-Adopting a style similar to Akka's ["classic" untyped API](https://doc.akka.io/docs/akka/current/actors.html#here-is-another-example-that-you-can-edit-and-run-in-the-browser-) is a non-started for Swift - it is unacceptable for such a thighly typed language to come out and say all messages are handled as `Any` with zero typesafety at all. It is important to remember that this is where Akka _started_ more than 10 years ago, however it is _not_ it's current API.
+Adopting a style similar to Akka's ["classic" untyped API](https://doc.akka.io/docs/akka/current/actors.html#here-is-another-example-that-you-can-edit-and-run-in-the-browser-) is not ideal because of the lack of type-safety in those classic APIs.
 
 Akka's typed actor API's represent actors as `Behavior<Message>` which is spawned, and then an `ActorRef<Message>` is returned from the spawn operation. The `Message` is a type representing, via sub-classing and immutable case classes, all possible messages this actor can reply to. Semantically this is equivalent to an `enum` in Swift. And we might indeed represent messages like this in Swift (even internally in an `ActorTransport` in the current proposal!) However, this model requires users to manually switch, destructure and handle much boilerplate related to wielding the types in the right ways so the model compiles and works properly. The typed API also heavily relies on Scala sugar for pattern matching within total and partial functions, allowing the expressions such as:
 
