@@ -1,7 +1,7 @@
 # Distributed Actors
 
 * Proposal: [SE-NNNN](NNNN-distributed-actors.md)
-* Authors: [Konrad 'ktoso' Malawski](https://github.com/ktoso), [Dario Rexin](https://github.com/drexin), [Doug Gregor](https://github.com/DougGregor), [Tomer Doron](https://github.com/tomerd)
+* Authors: [Konrad 'ktoso' Malawski](https://github.com/ktoso), [Dario Rexin](https://github.com/drexin), [Doug Gregor](https://github.com/DougGregor), [Tomer Doron](https://github.com/tomerd), [Kavon Farvardin](https://github.com/kavon)
 * Review Manager: TBD
 * Status: **Implementation in progress**
 * Implementation: 
@@ -449,71 +449,66 @@ Thanks to distributed actors and functions being expressed in the type system, i
 
 #### Local initializers
 
-All `distributed actors` have a synthesized designated initializer that accepts an `ActorTransport`: `init(transport:)`
+All user-defined designated initializers are collectively referred to as "local" initializers. This is just a simple way to remember that any user-defined initializer will create a _local_ instance of an actor. 
 
-Every instantiation of a local distributed actor must call this initializer, which in turn performs lifecycle interactions with the transport, initializing the actor's `id` and `transport` properties.
+All designated initializers of a distributed actor must accept exactly one `ActorTransport` parameter. 
 
-This initializer contains synthesized lifecycle interactions with the passed in transport. A simplified outline of the synthesized initializer code is shown below:
+This `ActorTransport` parameter is implicitly used to fulfil an important contract with the transport and the actor itself: it first must be assigned an `ActorIdentity` and once fully initialized it must inform the transport that it is ready to receive messages by calling `transport.actorReady(self)`.
+
+This also means that, unlike other actors, the default no-argument `init()` initializer is _not_ synthesized for distributed actors. Instead, a default `init(transport:)` is initialized in its place:
 
 ```swift
-distributed actor Greeter {
-  /* ~~~ synthesized ~~~ */
-  nonisolated var transport: ActorTransport { ... }
-  nonisolated var id identity: AnyActorIdentity { ... }
-
-  init(transport: ActorTransport) {
-    self.transport = transport
-    self.address = AnyActorIdentity(transport.assignAddress(Self.self))
-    // ... 
-  }
-  /* === end of synthesized === */
+distributed actor Blank { 
+  // This Distributed Actor Is Intentionally Left Blank
 }
+
+Dog() // error: missing argument for parameter 'transport' in call
+Dog(transport: Cluster(...))
 ```
 
-Currently, overriding of the `init(transport:)` initializer itself is _not_ allowed. 
-
-> **NOTE:** It is understood that it would be nice to allow implementing their own `init(transport:)`, we would like to allow this but need to then figure out how the transport and interaction with it were to be initialized. Perhaps this isn't a big enough issue though.
-
-It is possible to define other initializers, however they must always delegate to this constructor, because of the important actor lifecycle tasks it performs:
+It is legal to declare any other designated initializers, or even the `init(transport:)` initializer, as long as they accept exactly one transport parameter:
 
 ```swift
-distributed actor Bad {
-  init() {} // forgot to call init(transport:)
-  // error: 'distributed actor' initializer 'init(y:transport:)' must (directly or indirectly) delegate to 'init(transport:)'
-  
-  init(transport: ActorTransport) {}
-  // Currently error: 'distributed actor' local-initializer 'init(transport:)' cannot be implemented explicitly
+distributed actor Capybara { 
+  init(transport: ActorTransport) { ... } // ok 
 }
-```
 
-```swift
-distributed actor OK1 {
+distributed actor Fish {
   let name: String
+  init(name: String, transport: ActorTransport) { ... } // ok
+  convenience init() { self.init(transport: GlobalTransport()) } // ok 
   
-  init(name: String) { // ok
-    self.init(transport: HardcodedTransport.global) // ok, but not recommended
-    self.name = name
-  }
+  // --- bad declarations ---
+  init(transport: Int) {...} // error: 'transport: Int' must conform to ActorTransport
+  init(name: String) {...} // error: missing 'ActorTransport' parameter
+  init(which one: ActorTransport, 
+       is   real: ActorTransport) {} // error: distributed actor designated initializer must accept exactly one 'ActorTransport' parameter
+  convenience init() {} // error: must delegate to designated initializer
   
-  init(name: String, transport: ActorTransport) {
-    self.init(transport: transport)
-    self.name = name
-  }
-}
-
-distributed actor OK2 {
-  
-  init(y: Int, transport: ActorTransport) { // ok
-    self.init(transport: transport)
-  }
-
-  init(x: Int, y: Int, transport: ActorTransport) {
-    // ok, since we do delegate to init(transport) *eventually*
-    self.init(y: y, transport: transport)
-  }
 }
 ```
 
+When declaring the `init(transport:)` explicitly, the type of `transport` must conform to `ActorTransport`.
+
+The synthesized code injected into local initializers can be thought of like this:
+
+```swift
+init(..., transport: ActorTransport) {
+  // ~~~ syntiesized ~~~
+  self._transport = transport
+  self._id = AnyActorIdentity(transport.assignIdentity(Self.self))
+  // === end of synthesized ===
+  
+  // ... user-code
+  self.name = name // etc.
+  
+  // ~~~ end of synthesized ~~~
+  transport.actorReady(self)
+  // === end of synthesized ===
+}
+```
+
+The transport and identity properties are initialized by the implicitly synthesized code, and once the actor is state is fully initialized, the self reference is offered to the transport, allowing it to store the reference for future resolve lookups.
 
 Thanks to the guarantee that the `init(transport:)` will _always_ be called when creating a distributed actor instance and the only other method of distributed actor initialization also ensures those properties are initialized properly, we are able to offer the `transport` and `id` properties as `nonisolated` members of any distributed actor. This is important, because those properties enable us to implement certain crucial protocol requirements using nonisolated functions, as we'll discuss in [Distributed functions and protocol conformances](#distributed-functions-and-protocol-conformances).
 
@@ -1382,6 +1377,48 @@ extension Greeter {
 
 ## Future Directions
 
+### Storing and requiring more specific Transport types
+
+For some specific use-cases it may be necessary to ensure an actor is only used over some speific transport. Currently this is not illegal, but the type-system does not reflect the specific type of a transport if it were to be initialized like this:
+
+```swift
+protocol OnlyIPCTransport: ActorTransport { ... }
+
+distributed actor Worker { 
+  init(transport: OnlyIPCTransport) {}
+}
+```
+
+Which means that this `Worker` actor can only ever be used with inter process communication transports, rather than arbitrary networking. 
+
+If a more specific transport is used, all initializers must use the same type for the transport parameter in their declarations.
+
+The distributed actor transport (or identity) property may not be declared explicitly. Though we could lift this restriction if it was deemed necessary.
+
+### Ability to customize parameter/return type requirements
+
+Currently distributed actors require all their parameters and return types to be `Codable` (and `Sendable`). However some transports may wish to restrict the set of allowed types even further, for example, only allowing the sending of integers and other "known to be safe" types.
+
+We suggest that a future version of distributed actors allows customizing this behavior by providing a typealias:
+
+```swift
+enum SuperSafe { 
+  case int(Int)
+  case safe(SomeSafeType)
+}
+
+distributed actor TrustNoOne { 
+  typealias MessageRequirement = SuperSafe
+  
+  distributed func hello(string: String) {}
+  // error: type 'String' of parameter 'string' is not allowed, 
+  //        only 'SuperSafe' types are allowed, because 
+  // 		    'TrustNoOne.MessageRequirement' restriction
+}
+```
+
+
+
 ### Resolving DistributedActor bound protocols
 
 In some situations it may be undesirable or impossible to share the implementation of a distributed actor (the `distributed actor` definition) between "server" and "client". 
@@ -1794,3 +1831,11 @@ This proposal is ABI additive.
 ## Effect on API resilience
 
 **TODO:** ???
+
+## Changelog
+
+- Remove `init(transport:)` and base the design around synthesis of the lifecycle calls into existing designated initializers
+- Remove `init(resolve:using:)` and replace it with a static resolve factory function which works much better with the DI challanges that such remote instance might be facing
+- Change `struct ActorAddress` to `protocol ActorIdentity` which allows for transports to customize and pick efficient representations of identities as apropriate for their underlying transport mechanisms
+  - These may remain URI-like structures, or highly optimized numeric representations (e.g. unique actor ID number)
+  - Makes implementation dependent on [SE-0309: Unlock existentials for all protocols](https://github.com/apple/swift-evolution/blob/main/proposals/0309-unlock-existential-types-for-all-protocols.md)
