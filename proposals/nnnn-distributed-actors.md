@@ -1143,6 +1143,55 @@ distributed actor Greeter {
 }
 ```
 
+#### Sharing identities and discovering Distributed Actors
+
+As discussed, identities are crucial to locate and resolve an opaque identity into a real and "live" actor reference that we can send messages through.
+
+However, how do we communicate an identity of one actor from one node to another if to identify _any distributed actor_ actor we need to know their identity to begin with? This immediately ends up in a "catch-22" situation, where in order to share an identity with another actor, we need to know _that_ actor's identity, but we can't know it, since we were not able to communicate with it yet!
+
+Luckily, this situation is not uncommon and has established solutions that generally speaking are forms of _service discovery_. Swift already offers a general purpose service discovery library with [swift-service-discovery](https://github.com/apple/swift-service-discovery), however it's focus is very generic and all about services, which means that for a given well-known service name e.g. "HelloCluster", we're able to lookup which _nodes_ are part of it, and therefore we should attempt connecting to them. Implementations of service discovery could be using DNS, specific key-value stores, or kubernetes APIs to locate pods within a cluster. 
+
+This is great, and solves the issue of locating _nodes_ of a cluster, however we also need to be able to locate specific _distributed actors_, that e.g. implement some specific protocol. For example, we would like to, regardless of their location locate all `Greeter` actors in our distributed actor system. We can use the well-known type name Greeter as key in the lookup, or we could additionally qualify it with some identifier for example only to find those `Greeter` actors which use the language `pl` (for Polish).
+
+In practice, _how_ such lookups are performed is highly tied to the underlying transport, and thus the transport library should provide a specific pattern to perform those lookups. We call this pattern the `Receptionist`, and it may take the following protocol shape:
+
+```swift
+protocol Receptionist: DistributedActor { 
+    @discardableResult
+    public func register<Guest>(
+        _ guest: Guest,
+        with key: Reception.Key<Guest>,
+        replyTo: ActorRef<>? = nil
+    ) async -> Reception.Registered<Guest> 
+      where Guest: ReceptionistGuest
+
+    distributed func lookup<Guest>(
+        _ key: Reception.Key<Guest>
+    ) async -> Reception.Listing<Guest> 
+      where Guest: DistributedActor
+
+  // more convenience functions may exist ...
+}
+```
+
+Such receptionist is a normal distributed actor, which may be resolved on the used transport and performs the actor "discovery" on our behalf.
+
+In practice, this means that locating all greeters in a system boils down to:
+
+```swift
+guard let anyGreeter =
+  try await Receptionist.resolve(transport)
+    .lookup(Greeter.self).first else {
+  print("No Greeter discovered!")
+}
+
+try await anyGreeter.greet("Caplin, the Capybara")
+```
+
+Notice that this pattern, by design, requires actors to opt-into being discoverable. This is important for a number of reasons, most importantly for security we would not want to allow any node in the system to resolve _arbitrary_ actor references by guessing their types and names. Instead, only distributed actors which opt into this discovery mechanism participate in it.
+
+It is still possible to _explicitly_ share an actor reference or identity throught messaging though. If security demands it, we can provide ways to ban specific actors from being shared in this way as well though.
+
 ### "Known to be local" distributed actors
 
 Usually programming with distributed actors means assuming that an actor may be remote, and thus only `Codable` parameters/return types may be used with it. This is a sound and resilient model, however it sometimes becomes a frustrating limitation when an actor is "_known to be local_".
