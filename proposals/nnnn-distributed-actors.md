@@ -834,7 +834,7 @@ A transport has two main responsibilities:
 - **Lifecycle management:** creating and resolving actor addresses which are used by the language runtime to construct distributed actor instances,
 - **Messaging:** perform all message dispatch and handling on behalf of a distributed actor it manages, specifically:
   - for a remote distributed actor reference: 
-    - be invoked by the framework's source generated `_remote_function` implementations with a "message" representation of the locally invoked function, serialize and dispatch it onto the network or other underlying transport mechanism. 
+    - be invoked by the framework's source generated `_remote_impl_function` implementations with a "message" representation of the locally invoked function, serialize and dispatch it onto the network or other underlying transport mechanism. 
     - This turns local actor function invocations into messages put on the network.
   - for a local distributed actor instance: 
     - handle all incoming messages on the transport, decode and dispatch them to the apropriate local recipient instance. 
@@ -1357,7 +1357,7 @@ The `_remote_<function-name>` is also synthesized at compile-time, however its i
 
 ```swift
 /* ~~~ synthesized ~~~ */
-dynamic func _remote_hi(name: String, surname: String) async throws -> String { 
+dynamic nonisolated func _remote_hi(name: String, surname: String) async throws -> String { 
   fatalError("""
              helpful message that one must provide a replacement for ths function, 
              e.g. by installing a SwiftPM plugin of some transport (e.g. ...).
@@ -1394,12 +1394,14 @@ extension Greeter {
 }
 ```
 
-Second, for outgoing messages still, we need to replace the remote function. This is currently done using the direct dynamic replacement API, however as we mature this piece of the proposal this may either get its own attribute, or become unnecessary.
+Second, for outgoing messages still, we need to replace the remote function. This is currently done using the direct dynamic replacement API, however as we mature this piece of the proposal this may either get its own attribute, or become unnecessary. 
+
+The dynamic replacement function must be `nonisoalted` because the actor is operating on is always _remote_ and therefore has no state, and access to its properties (other than the transport and id) must be prevented, because they don't exist. Thankfully the `nonisolated` attribute achieves exactly that, bu making the function effectively be semantically "outside" the actor.
 
 ```swift
 extension Greeter { 
   @_dynamicReplacement(for: hi(name:surname:))
-  func _remote_hi(name: String, surname: String) async throws -> String {
+  nonisolated func _remote_impl_hi(name: String, surname: String) async throws -> String {
     let message = _HiMessage(name: name, surname: surname)
     try await self._transport.send(message)
   }
